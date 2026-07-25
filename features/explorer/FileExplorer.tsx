@@ -9,6 +9,9 @@ import { useWorkspaceStore } from '../../stores/useWorkspaceStore';
 import { useLayoutStore } from '../../stores/useLayoutStore';
 import { FileNode } from '../../types';
 
+import { Button } from '../../components/ui/button';
+import { pickNativeFolder } from '../../utils/nativePicker';
+
 interface FileNodeItemProps {
   node: FileNode;
   depth: number;
@@ -114,7 +117,7 @@ const FileNodeItem: React.FC<FileNodeItemProps> = ({ node, depth, searchFilter, 
 export const FileExplorer: React.FC = () => {
   const { 
     currentProject, fileTree, isScanning, scanProcessedFiles, 
-    triggerRescan, errorMessage, clearError, addNode, renameNode, deleteNode, openTab
+    triggerRescan, errorMessage, clearError, addNode, renameNode, deleteNode, openTab, openWorkspace
   } = useWorkspaceStore();
   const [searchFilter, setSearchFilter] = useState('');
   
@@ -242,9 +245,20 @@ export const FileExplorer: React.FC = () => {
             )
           )
         ) : (
-          <div className="flex flex-col items-center justify-center p-6 text-center text-slate-550 text-xs gap-1.5 h-full">
-            <HelpCircle className="h-8 w-8 text-slate-700" />
-            <span>No workspace loaded. Open a local folder using the Menu bar.</span>
+          <div className="flex flex-col items-center justify-center p-6 text-center text-slate-500 text-xs gap-2 h-full">
+            <FolderOpen className="h-8 w-8 text-slate-700 mb-1" />
+            <span>No workspace loaded.</span>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={async () => {
+                const path = await pickNativeFolder();
+                if (path) await openWorkspace(path);
+              }}
+              className="mt-1 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 cursor-pointer"
+            >
+              <span>Open Folder...</span>
+            </Button>
           </div>
         )}
       </div>

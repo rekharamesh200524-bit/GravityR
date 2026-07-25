@@ -10,6 +10,8 @@ import { useChatStore } from '../../stores/useChatStore';
 import { Dialog } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 
+import { pickNativeFolder } from '../../utils/nativePicker';
+
 export const Sidebar: React.FC = () => {
   const { sidebarCollapsed, toggleSidebar } = useLayoutStore();
   const { recentProjects, currentProject, openWorkspace, fetchRecents } = useWorkspaceStore();
@@ -23,6 +25,13 @@ export const Sidebar: React.FC = () => {
   }, [fetchRecents]);
 
   const handleOpenWorkspace = async () => {
+    const path = await pickNativeFolder();
+    if (path) {
+      await openWorkspace(path);
+    }
+  };
+
+  const handleManualOpenWorkspace = async () => {
     if (!folderPath.trim()) return;
     await openWorkspace(folderPath.trim());
     setIsNewProjectOpen(false);
@@ -67,7 +76,7 @@ export const Sidebar: React.FC = () => {
             <div className="flex items-center justify-between text-xs font-semibold text-slate-500 uppercase tracking-wider px-1">
               <span>Workspaces</span>
               <button
-                onClick={() => setIsNewProjectOpen(true)}
+                onClick={handleOpenWorkspace}
                 className="text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
                 title="Open Workspace"
               >
@@ -99,7 +108,7 @@ export const Sidebar: React.FC = () => {
         ) : (
           <div className="flex flex-col items-center gap-2">
             <button
-              onClick={() => setIsNewProjectOpen(true)}
+              onClick={handleOpenWorkspace}
               className="p-1.5 text-slate-400 hover:bg-slate-800 rounded-lg cursor-pointer"
               title="Open Workspace"
             >
@@ -212,7 +221,7 @@ export const Sidebar: React.FC = () => {
             <Button variant="secondary" size="sm" onClick={() => setIsNewProjectOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="sm" onClick={handleOpenWorkspace}>
+            <Button variant="primary" size="sm" onClick={handleManualOpenWorkspace}>
               Open Workspace
             </Button>
           </div>

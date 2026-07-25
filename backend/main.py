@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database.connection import engine, Base
 from .config.settings import settings
 from .api.routes import router as api_router
+from .terminal.websocket import ws_router as terminal_ws_router
 
 # Initialize SQLite database tables dynamically on backend startup
 Base.metadata.create_all(bind=engine)
@@ -26,6 +27,7 @@ app.add_middleware(
 
 # Route mounting
 app.include_router(api_router, prefix="/api")
+app.include_router(terminal_ws_router)
 
 @app.get("/")
 def read_root():

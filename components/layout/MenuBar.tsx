@@ -11,8 +11,20 @@ import { Dialog } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { CodeXml, ShieldAlert, Cpu } from 'lucide-react';
 
+import { pickNativeFolder } from '../../utils/nativePicker';
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      openDirectory: () => Promise<string | null>;
+      watchDirectory: (path: string | null) => void;
+      onWorkspaceChanged: (callback: (data: any) => void) => () => void;
+    };
+  }
+}
+
 export const MenuBar: React.FC = () => {
-  const { currentProject, closeWorkspace, openTab, addNode } = useWorkspaceStore();
+  const { currentProject, closeWorkspace, openTab, addNode, openWorkspace } = useWorkspaceStore();
   const { toggleTerminal, toggleInspector, toggleSidebar } = useLayoutStore();
   const { sendMessage } = useChatStore();
   const { model } = useSettingsStore();
@@ -39,6 +51,13 @@ export const MenuBar: React.FC = () => {
     }, 200);
   };
 
+  const handleOpenFolder = async () => {
+    const path = await pickNativeFolder();
+    if (path) {
+      await openWorkspace(path);
+    }
+  };
+
   const handleNewFile = () => {
     const name = prompt("Enter new file name (e.g. index.html):");
     if (!name) return;
@@ -63,6 +82,7 @@ export const MenuBar: React.FC = () => {
       actions: [
         { label: 'New File...', shortcut: 'Ctrl+N', onClick: handleNewFile },
         { label: 'New Folder...', onClick: handleNewFolder },
+        { label: 'Open Folder...', shortcut: 'Ctrl+O', onClick: handleOpenFolder },
         { label: 'Save Active Buffer', shortcut: 'Ctrl+S', onClick: () => alert('Workspace file buffers saved.') },
         { label: 'Close Workspace', onClick: () => closeWorkspace() },
       ]

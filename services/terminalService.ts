@@ -1,139 +1,241 @@
+import { useTerminalStore } from '../stores/useTerminalStore';
+
+export interface BackendTerminalSession {
+  session_id: string;
+  shell_type: string;
+  working_directory: string;
+  created_at: string;
+  last_activity: string;
+  status: string;
+  pid: number;
+}
+
+export interface TerminalConnectionHandle {
+  socket: WebSocket | null;
+  sendInput: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  close: () => void;
+}
+
 export class TerminalService {
-  private currentCommand = '';
-  private onDataCallback: ((data: string) => void) | null = null;
-  private currentDir = 'D:\\GravityR';
+  // Direct sockets registered by TerminalTabItem components
+  private directSockets: Map<string, WebSocket> = new Map();
+  // Legacy connection handles (kept for backward compat)
+  private activeConnections: Map<string, TerminalConnectionHandle> = new Map();
+  private legacySubscribers: Set<(data: string) => void> = new Set();
 
-  constructor() {}
-
-  public subscribe(callback: (data: string) => void) {
-    this.onDataCallback = callback;
-    // Print initial greeting
-    this.write('\r\n\x1b[1;36mGravityX Integrated Shell v1.0.0\x1b[0m\r\n');
-    this.write('\x1b[90mConnected to local workspace environment\x1b[0m\r\n\r\n');
-    this.printPrompt();
+  private get apiBase() {
+    if (typeof window === 'undefined') return 'http://localhost:8000/api';
+    const host = window.location.hostname || 'localhost';
+    return `http://${host}:8000/api`;
   }
 
-  public handleInput(data: string) {
-    if (!this.onDataCallback) return;
+  private get wsBase() {
+    if (typeof window === 'undefined') return 'ws://localhost:8000';
+    const host = window.location.hostname || 'localhost';
+    return `ws://${host}:8000`;
+  }
 
-    // Handle character input
-    for (let i = 0; i < data.length; i++) {
-      const char = data[i];
+  /**
+   * Register a WebSocket socket managed directly by a TerminalTabItem.
+   */
+  public registerDirectSocket(sessionId: string, socket: WebSocket): void {
+    this.directSockets.set(sessionId, socket);
+    console.log(`[TERMINAL SERVICE] Registered direct socket for session ${sessionId}. Total: ${this.directSockets.size}`);
+  }
 
-      if (char === '\r') {
-        // Carriage Return (Enter)
-        this.write('\r\n');
-        this.executeCommand(this.currentCommand.trim());
-        this.currentCommand = '';
-      } else if (char === '\u007F') {
-        // Backspace
-        if (this.currentCommand.length > 0) {
-          this.currentCommand = this.currentCommand.slice(0, -1);
-          // Move cursor back, write space to delete, move cursor back again
-          this.write('\b \b');
-        }
-      } else if (char === '\u0003') {
-        // Ctrl+C
-        this.write('^C\r\n');
-        this.currentCommand = '';
-        this.printPrompt();
+  /**
+   * Unregister a direct socket when TerminalTabItem unmounts.
+   */
+  public unregisterDirectSocket(sessionId: string): void {
+    this.directSockets.delete(sessionId);
+    console.log(`[TERMINAL SERVICE] Unregistered direct socket for session ${sessionId}. Total: ${this.directSockets.size}`);
+  }
+
+  /**
+   * Spawns a new isolated terminal session on the backend.
+   */
+  public async createBackendSession(shellType: string = 'powershell', cwd?: string): Promise<BackendTerminalSession> {
+    const defaultCwd = 'D:\\GravityR';
+    const targetCwd = cwd || defaultCwd;
+
+    console.log(`[TERMINAL SERVICE] Creating backend session: shellType=${shellType}, cwd=${targetCwd}`);
+
+    const response = await fetch(`${this.apiBase}/terminal/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shell_type: shellType,
+        cwd: targetCwd,
+        cols: 80,
+        rows: 24,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create terminal session: HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`[TERMINAL SERVICE] Session created: ${data.session_id}, PID: ${data.pid}`);
+    return data;
+  }
+
+  /**
+   * Closes a backend terminal session by session_id.
+   */
+  public async closeBackendSession(sessionId: string): Promise<boolean> {
+    console.log(`[TERMINAL SERVICE] Closing backend session: ${sessionId}`);
+    try {
+      // Close direct socket if registered
+      const socket = this.directSockets.get(sessionId);
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        socket.close(1000, 'Session closed by user');
+      }
+      this.directSockets.delete(sessionId);
+
+      // Also close legacy handle if any
+      const handle = this.activeConnections.get(sessionId);
+      if (handle) {
+        handle.close();
+        this.activeConnections.delete(sessionId);
+      }
+
+      const response = await fetch(`${this.apiBase}/terminal/${sessionId}/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      return response.ok;
+    } catch (err) {
+      console.error(`Error closing session ${sessionId}:`, err);
+      return false;
+    }
+  }
+
+  /**
+   * Legacy: connect WebSocket (kept for backward compat but NOT used by TerminalTabItem directly).
+   */
+  public connectWebSocket(
+    sessionId: string,
+    onData: (data: string) => void,
+    onOpen?: () => void,
+    onClose?: () => void
+  ): TerminalConnectionHandle {
+    // Close any stale connection for this session
+    const existingHandle = this.activeConnections.get(sessionId);
+    if (existingHandle) {
+      existingHandle.close();
+      this.activeConnections.delete(sessionId);
+    }
+
+    const wsUrl = `${this.wsBase}/ws/terminal/${sessionId}`;
+    console.log(`[WS DIAGNOSTIC] CONNECTING - Session: ${sessionId}, URL: ${wsUrl}`);
+    const socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      console.log(`[WS DIAGNOSTIC] OPEN - Session: ${sessionId}`);
+      if (onOpen) onOpen();
+    };
+
+    socket.onmessage = (event) => {
+      onData(event.data);
+      this.legacySubscribers.forEach((sub) => sub(event.data));
+    };
+
+    socket.onclose = (event: CloseEvent) => {
+      console.log(`[WS DIAGNOSTIC] CLOSE - Session: ${sessionId}, code: ${event.code}, wasClean: ${event.wasClean}`);
+      this.activeConnections.delete(sessionId);
+      if (onClose) onClose();
+    };
+
+    socket.onerror = (event: Event) => {
+      const target = event.target as WebSocket;
+      console.error(`[WS DIAGNOSTIC] ERROR - Session: ${sessionId}, readyState: ${target?.readyState ?? socket.readyState}`);
+      onData('\r\n\x1b[31mTerminal connection error.\x1b[0m\r\n');
+    };
+
+    const sendInput = (data: string) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data);
       } else {
-        // Visible characters
-        this.currentCommand += char;
-        this.write(char);
+        console.warn(`[TERMINAL] Cannot send - socket not OPEN (state=${socket.readyState})`);
+      }
+    };
+
+    const resize = (cols: number, rows: number) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    };
+
+    const close = () => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000, 'Explicit client close');
+      }
+      this.activeConnections.delete(sessionId);
+    };
+
+    const handle: TerminalConnectionHandle = { socket, sendInput, resize, close };
+    this.activeConnections.set(sessionId, handle);
+    return handle;
+  }
+
+  /**
+   * Sends input to the active terminal session (multi-tab routing).
+   */
+  public handleInput(data: string) {
+    const activeTabId = useTerminalStore.getState().activeTabId;
+
+    // Try direct socket first
+    if (activeTabId) {
+      const socket = this.directSockets.get(activeTabId);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(data);
+        return;
       }
     }
-  }
 
-  private write(data: string) {
-    if (this.onDataCallback) {
-      this.onDataCallback(data);
+    // Fallback to legacy handles
+    if (activeTabId && this.activeConnections.has(activeTabId)) {
+      this.activeConnections.get(activeTabId)?.sendInput(data);
     }
   }
 
-  private printPrompt() {
-    this.write(`\r\n\x1b[1;32mgravityx\x1b[0m \x1b[1;34m${this.currentDir}\x1b[0m\r\n$ `);
+  /**
+   * Resizes the active terminal session.
+   */
+  public resize(cols: number, rows: number) {
+    const activeTabId = useTerminalStore.getState().activeTabId;
+    if (activeTabId) {
+      const socket = this.directSockets.get(activeTabId);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'resize', cols, rows }));
+        return;
+      }
+    }
+    if (activeTabId && this.activeConnections.has(activeTabId)) {
+      this.activeConnections.get(activeTabId)?.resize(cols, rows);
+    }
   }
 
-  private executeCommand(cmd: string) {
-    if (!cmd) {
-      this.printPrompt();
-      return;
-    }
+  /**
+   * Subscribes to terminal output stream (legacy support).
+   */
+  public subscribe(callback: (data: string) => void) {
+    this.legacySubscribers.add(callback);
+  }
 
-    const args = cmd.split(' ');
-    const primary = args[0].toLowerCase();
-
-    switch (primary) {
-      case 'clear':
-        this.write('\x1b[2J\x1b[H');
-        break;
-      case 'help':
-        this.write('Available commands:\r\n');
-        this.write('  help        - Display this menu\r\n');
-        this.write('  clear       - Clear screen\r\n');
-        this.write('  git status  - View workspace file diff status\r\n');
-        this.write('  npm run dev - Launch GravityX local development compiler\r\n');
-        this.write('  npm test    - Run workspace automated test suite\r\n');
-        this.write('  ls / dir    - List current files\r\n');
-        break;
-      case 'ls':
-      case 'dir':
-        this.write('Mode                 LastWriteTime         Length Name\r\n');
-        this.write('----                 -------------         ------ ----\r\n');
-        this.write('d----          15-Jul-26   1:51 PM                app\r\n');
-        this.write('d----          15-Jul-26   1:51 PM                components\r\n');
-        this.write('d----          15-Jul-26   1:51 PM                features\r\n');
-        this.write('-a---          15-Jul-26   1:51 PM            534 package.json\r\n');
-        this.write('-a---          15-Jul-26   1:51 PM            666 tsconfig.json\r\n');
-        break;
-      case 'git':
-        if (args[1] === 'status') {
-          this.write('\x1b[33mOn branch main\x1b[0m\r\n');
-          this.write('Your branch is up to date with \'origin/main\'.\r\n\r\n');
-          this.write('Changes not staged for commit:\r\n');
-          this.write('  (use "git add <file>..." to update what will be committed)\r\n');
-          this.write('  (use "git restore <file>..." to discard changes)\r\n');
-          this.write('\t\x1b[31mmodified:   app/page.tsx\x1b[0m\r\n');
-          this.write('\t\x1b[31mmodified:   components/Button.tsx\x1b[0m\r\n\r\n');
-          this.write('no changes added to commit (use "git add" and/or "git commit -a")\r\n');
-        } else {
-          this.write(`git: sub-command '${args[1]}' is not supported in this mock terminal. Try 'git status'.\r\n`);
-        }
-        break;
-      case 'npm':
-        if (args[1] === 'run' && args[2] === 'dev') {
-          this.write('\x1b[36m> gravityx-frontend@0.1.0 dev\x1b[0m\r\n');
-          this.write('> next dev\r\n\r\n');
-          this.write('\x1b[32m▲ Next.js 15.0.0\x1b[0m\r\n');
-          this.write('  - Local:        \x1b[4mhttp://localhost:3000\x1b[0m\r\n');
-          this.write('  - Environments: .env.local\r\n\r\n');
-          this.write('\x1b[90m[Turbopack] compiling...\x1b[0m\r\n');
-          
-          setTimeout(() => {
-            this.write('\x1b[32m✓ Compiled in 420ms\x1b[0m (1822 modules)\r\n');
-            this.write('\x1b[36m[Client] loaded client bundles successfully\x1b[0m\r\n');
-          }, 1200);
-          return; // Don't print prompt immediately
-        } else if (args[1] === 'test') {
-          this.write('\x1b[36m> gravityx-frontend@0.1.0 test\x1b[0m\r\n');
-          this.write('> jest\r\n\r\n');
-          this.write('\x1b[32mPASS\x1b[0m components/__tests__/Button.test.tsx\r\n');
-          this.write('\x1b[32mPASS\x1b[0m stores/__tests__/chatStore.test.ts\r\n\r\n');
-          this.write('Test Suites: \x1b[32m2 passed\x1b[0m, 2 total\r\n');
-          this.write('Tests:       \x1b[32m8 passed\x1b[0m, 8 total\r\n');
-          this.write('Snapshots:   0 total\r\n');
-          this.write('Time:        1.42s\r\n');
-          this.write('\x1b[90mRan all test suites.\x1b[0m\r\n');
-        } else {
-          this.write(`npm: command '${args.slice(1).join(' ')}' not fully configured. Try 'npm run dev' or 'npm test'.\r\n`);
-        }
-        break;
-      default:
-        this.write(`shell: command not found: ${primary}. Type 'help' to see available commands.\r\n`);
-    }
-
-    this.printPrompt();
+  public disconnect() {
+    console.log('[TERMINAL SERVICE] Disconnecting all sessions...');
+    this.directSockets.forEach((socket) => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000, 'Service disconnect');
+      }
+    });
+    this.directSockets.clear();
+    this.activeConnections.forEach((handle) => handle.close());
+    this.activeConnections.clear();
   }
 }
+
 export const terminalService = new TerminalService();

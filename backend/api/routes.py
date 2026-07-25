@@ -10,12 +10,14 @@ from .agent_routes import router as agent_router
 from .gateway_routes import router as gateway_router
 from .prompt_routes import router as prompt_router
 from .tool_routes import router as tool_router
+from .terminal_routes import router as terminal_router
 
 router = APIRouter()
 router.include_router(agent_router)
 router.include_router(gateway_router)
 router.include_router(prompt_router)
 router.include_router(tool_router)
+router.include_router(terminal_router)
 
 
 # Pydantic schemas
@@ -94,6 +96,7 @@ def get_workspace_info(project_id: str = Query(...), db: Session = Depends(get_d
     return {
         "status": "success",
         "info": {
+            "id": project.id,
             "name": project.name,
             "path": project.path,
             "framework": project.framework or "Detecting...",

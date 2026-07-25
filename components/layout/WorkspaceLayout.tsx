@@ -16,6 +16,16 @@ import { StatusBar } from './StatusBar';
 import { Database, Plus, Trash2, ShieldCheck, Search, GitBranch, Sparkles, Bookmark, Blocks, Settings } from 'lucide-react';
 import { Button } from '../ui/button';
 
+declare global {
+  interface Window {
+    electronAPI?: {
+      openDirectory: () => Promise<string | null>;
+      watchDirectory: (path: string | null) => void;
+      onWorkspaceChanged: (callback: (data: any) => void) => () => void;
+    };
+  }
+}
+
 export const WorkspaceLayout: React.FC = () => {
   const { 
     activeSidebarView, 
@@ -27,12 +37,83 @@ export const WorkspaceLayout: React.FC = () => {
     setTerminalCollapsed
   } = useLayoutStore();
 
+  const { currentProject, openWorkspace, triggerRescan } = useWorkspaceStore();
   const { memories, addMemory, removeMemory } = useMemoryStore();
   const [newMemoryText, setNewMemoryText] = useState('');
   const [isAddingFact, setIsAddingFact] = useState(false);
   
   const [savedHorizontalLayout, setSavedHorizontalLayout] = useState<any>(undefined);
   const [savedVerticalLayout, setSavedVerticalLayout] = useState<any>(undefined);
+
+  // 1. Dynamic Window Title Synchronization
+  useEffect(() => {
+    if (currentProject) {
+      document.title = `${currentProject.name} — GravityX`;
+    } else {
+      document.title = "GravityX";
+    }
+  }, [currentProject]);
+
+  // 2. Drag & Drop workspace imports
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        // In Electron, the dropped file object contains the absolute .path attribute
+        const path = (file as any).path;
+        if (path) {
+          await openWorkspace(path);
+        }
+      }
+    };
+
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [openWorkspace]);
+
+  // 3. Electron File Watcher listener initialization
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      if (currentProject?.path) {
+        window.electronAPI.watchDirectory(currentProject.path);
+      } else {
+        window.electronAPI.watchDirectory(null);
+      }
+    }
+  }, [currentProject]);
+
+  // 4. Handle workspace modification notifications
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      let timer: NodeJS.Timeout | null = null;
+      const unsubscribe = window.electronAPI.onWorkspaceChanged((data: any) => {
+        console.log("Workspace change event received:", data);
+        // Debounce rescan triggers by 1s to prevent database locks
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          triggerRescan();
+        }, 1000);
+      });
+
+      return () => {
+        if (timer) clearTimeout(timer);
+        if (unsubscribe) unsubscribe();
+      };
+    }
+  }, [triggerRescan]);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
