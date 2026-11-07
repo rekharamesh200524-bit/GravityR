@@ -78,9 +78,27 @@ function buildExecutionSteps(prompt: string, complexity: ComplexityLevel): Execu
   }));
 }
 
-function guessAffectedFiles(prompt: string): string[] {
+function guessAffectedFiles(prompt: string, activeFile?: string | null): string[] {
   const lower = prompt.toLowerCase();
   const files: string[] = [];
+
+  // 1. Extract explicit filenames mentioned in the prompt (e.g. test.py, index.html)
+  const fileRegex = /(?:^|\s|["'`/])([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]{1,10})/g;
+  let match: RegExpExecArray | null;
+  while ((match = fileRegex.exec(prompt)) !== null) {
+    const fn = match[1].replace(/^[/\\]+/, '');
+    if (!files.includes(fn)) {
+      files.push(fn);
+    }
+  }
+
+  // 2. If active file is open, include it if no other files or if relevant
+  if (activeFile) {
+    const cleanActive = activeFile.replace(/^[/\\]+/, '');
+    if (!files.includes(cleanActive)) {
+      files.push(cleanActive);
+    }
+  }
 
   const FILE_HINTS: [string, string][] = [
     ['dashboard', 'app/dashboard/page.tsx'],
@@ -97,7 +115,7 @@ function guessAffectedFiles(prompt: string): string[] {
   ];
 
   for (const [keyword, file] of FILE_HINTS) {
-    if (lower.includes(keyword)) files.push(file);
+    if (lower.includes(keyword) && !files.includes(file)) files.push(file);
   }
 
   return files.length > 0 ? files : ['(to be determined by Repository Search)'];
@@ -105,7 +123,7 @@ function guessAffectedFiles(prompt: string): string[] {
 
 // ─── Planner ────────────────────────────────────────────────
 export class Planner {
-  async analyze(task: AgentTask): Promise<PlannerOutput> {
+  async analyze(task: AgentTask, activeFile?: string | null): Promise<PlannerOutput> {
     const start = Date.now();
 
     // Simulate planner thinking time
@@ -115,7 +133,7 @@ export class Planner {
     const riskLevel = estimateRisk(task.prompt);
     const estimatedTokens = estimateTokens(complexity);
     const executionSteps = buildExecutionSteps(task.prompt, complexity);
-    const affectedFiles = guessAffectedFiles(task.prompt);
+    const affectedFiles = guessAffectedFiles(task.prompt, activeFile);
 
     const warnings: string[] = [];
     if (riskLevel === 'high') warnings.push('This task touches high-risk areas. Proceed carefully.');

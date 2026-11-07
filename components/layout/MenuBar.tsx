@@ -51,11 +51,11 @@ export const MenuBar: React.FC = () => {
     }, 200);
   };
 
-  const handleOpenFolder = async () => {
-    const path = await pickNativeFolder();
-    if (path) {
-      await openWorkspace(path);
-    }
+  const { setFolderModalOpen } = useWorkspaceStore();
+
+  const handleOpenFolder = () => {
+    console.log('[WORKSPACE DEBUG] Open Folder clicked');
+    setFolderModalOpen(true);
   };
 
   const handleNewFile = () => {

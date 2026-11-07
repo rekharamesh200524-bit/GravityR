@@ -70,54 +70,61 @@ export const TerminalTabItem: React.FC<TerminalTabItemProps> = ({ tab, isActive 
       }
     });
 
-    // Create a FRESH WebSocket directly — no reuse guard, no stale callbacks
-    const wsHost = typeof window !== 'undefined' ? window.location.hostname || 'localhost' : 'localhost';
-    const wsUrl = `ws://${wsHost}:8000/ws/terminal/${tab.sessionId}`;
-    console.log(`[TERMINAL] Connecting WebSocket: ${wsUrl}`);
+    let isUnmounted = false;
+    let socket: WebSocket | null = null;
+    let connectTimeout: NodeJS.Timeout | null = null;
 
-    const socket = new WebSocket(wsUrl);
+    const connectWebSocket = (attempt = 1) => {
+      if (isUnmounted) return;
+      const wsHost = typeof window !== 'undefined' ? window.location.hostname || 'localhost' : 'localhost';
+      const wsUrl = `ws://${wsHost}:8000/ws/terminal/${tab.sessionId}`;
+      console.log(`[TERMINAL DEBUG] Connecting WebSocket (attempt ${attempt}): ${wsUrl}`);
 
-    socket.onopen = () => {
-      console.log(`[TERMINAL] WebSocket OPEN for session ${tab.sessionId}`);
-      term.focus();
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log(`[TERMINAL DEBUG] WebSocket opened`);
+        if (socket) {
+          terminalService.registerDirectSocket(tab.sessionId, socket);
+        }
+        term.focus();
+      };
+
+      socket.onmessage = (event: MessageEvent) => {
+        term.write(event.data);
+      };
+
+      socket.onclose = (event: CloseEvent) => {
+        console.log(`[TERMINAL DEBUG] WebSocket close code=${event.code}`);
+        if (!isUnmounted) {
+          if (event.code === 1008 && attempt < 3) {
+            connectTimeout = setTimeout(() => connectWebSocket(attempt + 1), 600);
+          } else if (!event.wasClean) {
+            term.writeln('\r\n\x1b[31m[Terminal connection closed]\x1b[0m');
+          }
+        }
+      };
+
+      socket.onerror = (event: Event) => {
+        console.error(`[TERMINAL DEBUG] WebSocket error:`, event);
+      };
     };
 
-    socket.onmessage = (event: MessageEvent) => {
-      console.log(`[TERMINAL] socket.onmessage: ${event.data.length} bytes`);
-      term.write(event.data);
-    };
-
-    socket.onclose = (event: CloseEvent) => {
-      console.log(`[TERMINAL] WebSocket CLOSED: code=${event.code}, reason="${event.reason}", wasClean=${event.wasClean}`);
-      if (!event.wasClean) {
-        term.writeln('\r\n\x1b[31m[Terminal connection closed]\x1b[0m');
-      }
-    };
-
-    socket.onerror = (event: Event) => {
-      console.error(`[TERMINAL] WebSocket ERROR for session ${tab.sessionId}:`, event);
-      term.writeln('\r\n\x1b[31m[Terminal connection error]\x1b[0m');
-    };
+    connectWebSocket(1);
 
     // Register keyboard input → send over WebSocket
     term.onData((data) => {
-      console.log(`[TERMINAL] onData: readyState=${socket.readyState}, data=${JSON.stringify(data)}`);
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(data);
-      } else {
-        console.warn(`[TERMINAL] Cannot send — WebSocket not OPEN (state=${socket.readyState})`);
       }
     });
 
     // Send resize events
     term.onResize(({ cols, rows }) => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     });
-
-    // Also register with terminalService for multi-tab routing
-    terminalService.registerDirectSocket(tab.sessionId, socket);
 
     // Fit on container resize
     const resizeObserver = new ResizeObserver(() => {
@@ -133,11 +140,13 @@ export const TerminalTabItem: React.FC<TerminalTabItemProps> = ({ tab, isActive 
 
     // Cleanup: close socket and dispose terminal when component unmounts
     return () => {
+      isUnmounted = true;
+      if (connectTimeout) clearTimeout(connectTimeout);
       console.log(`[TERMINAL] Unmounting — closing socket for session ${tab.sessionId}`);
       window.removeEventListener('theme-changed', handleThemeChange);
       resizeObserver.disconnect();
       terminalService.unregisterDirectSocket(tab.sessionId);
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         socket.close(1000, 'Terminal component unmounted');
       }
       term.dispose();

@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from ..database.models import ExecutionLog, AuditLog
 from ..ai_gateway.logging.gateway_logger import gateway_logger
+from .workspace_manager import workspace_manager
 
 class ToolExecutor:
     """
@@ -16,33 +17,51 @@ class ToolExecutor:
     """
     def __init__(self, workspace_path: str = ".", backup_dir: str = ".gravityx_backups"):
         self.workspace_path = os.path.abspath(workspace_path)
-        self.backup_dir = os.path.abspath(os.path.join(self.workspace_path, backup_dir))
-        os.makedirs(self.backup_dir, exist_ok=True)
+        self.backup_dir_name = backup_dir
         
         # Protected files that cannot be deleted or written outside workspace
         self.protected_basenames = {"workspace.db", ".git"}
 
-    def _safe_path(self, path: str) -> str:
-        """Resolve path and assert it stays within the workspace sandbox."""
-        full_path = os.path.abspath(os.path.join(self.workspace_path, path))
-        if not full_path.startswith(self.workspace_path):
-            raise PermissionError(f"Security Alert: Attempted out-of-sandbox access at '{path}'")
-        return full_path
+    def _resolve_workspace_root(self, workspace_id: Optional[str] = None) -> str:
+        """Resolve the active workspace root path dynamically."""
+        session = workspace_manager.get_session(workspace_id)
+        if session:
+            return session.root_path
+        if workspace_id and os.path.isabs(workspace_id) and os.path.isdir(workspace_id):
+            return os.path.abspath(workspace_id)
+        active = workspace_manager.get_active_session()
+        if active:
+            return active.root_path
+        if self.workspace_path and self.workspace_path != "." and os.path.isdir(self.workspace_path):
+            return os.path.abspath(self.workspace_path)
+        raise PermissionError("Security Alert: No active workspace found. Please open a workspace before running tools.")
 
-    def _create_backup(self, rel_path: str) -> str:
+    def _safe_path(self, path: str, workspace_id: Optional[str] = None) -> str:
+        """Resolve path and assert it stays within the workspace sandbox."""
+        target_ws = workspace_id or (workspace_manager.get_active_session().root_path if workspace_manager.get_active_session() else self.workspace_path)
+        return workspace_manager.validate_path(target_ws, path)
+
+    def _get_backup_dir(self, workspace_id: Optional[str] = None) -> str:
+        ws_root = self._resolve_workspace_root(workspace_id)
+        b_dir = os.path.abspath(os.path.join(ws_root, self.backup_dir_name))
+        os.makedirs(b_dir, exist_ok=True)
+        return b_dir
+
+    def _create_backup(self, rel_path: str, workspace_id: Optional[str] = None) -> str:
         """Create a backup copy of a file before mutating or deleting it."""
-        abs_path = self._safe_path(rel_path)
+        abs_path = self._safe_path(rel_path, workspace_id)
         if not os.path.exists(abs_path):
             return ""
             
-        # Create unique name based on timestamp and filepath hashing
+        b_dir = self._get_backup_dir(workspace_id)
         sha = hashlib.sha256(rel_path.encode()).hexdigest()[:10]
         timestamp = int(time.time())
         backup_filename = f"backup_{timestamp}_{sha}_{os.path.basename(rel_path)}"
-        backup_path = os.path.join(self.backup_dir, backup_filename)
+        backup_path = os.path.join(b_dir, backup_filename)
         
-        # Ensure backup folder exists dynamically
-        os.makedirs(self.backup_dir, exist_ok=True)
+        shutil.copy2(abs_path, backup_path)
+        gateway_logger.info(f"Backup created for '{rel_path}' at '{backup_path}'", "ToolExecutor")
+        return backup_path
         shutil.copy2(abs_path, backup_path)
         gateway_logger.info(f"Backup created for '{rel_path}' at '{backup_path}'", "ToolExecutor")
         return backup_path
@@ -80,11 +99,12 @@ class ToolExecutor:
 
     # ─── File Tools ─────────────────────────────────────────────
 
-    def read_file(self, db: Session, task_id: str, path: str) -> Dict[str, Any]:
+    def read_file(self, db: Session, task_id: str, path: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Safely read a workspace file."""
         t0 = time.time()
         try:
-            abs_path = self._safe_path(path)
+            abs_path = self._safe_path(path, workspace_id)
+            ws_root = self._resolve_workspace_root(workspace_id)
             if not os.path.exists(abs_path):
                 raise FileNotFoundError(f"File not found: {path}")
                 
@@ -93,17 +113,20 @@ class ToolExecutor:
                 
             elapsed = time.time() - t0
             self._log_execution(db, task_id, "read", f"Read file: {path}", "success", elapsed)
+            print(f"[TOOL_EXEC_LOG] workspaceId={workspace_id} workspaceRoot={ws_root} requestedFile={path} toolName=read_file toolResult=SUCCESS", flush=True)
             return {"status": "success", "content": content, "path": path}
         except Exception as e:
             elapsed = time.time() - t0
             self._log_execution(db, task_id, "read", f"Failed to read file: {path} ({e})", "error", elapsed)
+            print(f"[TOOL_EXEC_LOG] workspaceId={workspace_id} requestedFile={path} toolName=read_file toolResult=FAILED error={e}", flush=True)
             return {"status": "error", "message": str(e)}
 
-    def write_file(self, db: Session, task_id: str, path: str, content: str) -> Dict[str, Any]:
+    def write_file(self, db: Session, task_id: str, path: str, content: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Safely write/mutate a file, verifying path, permissions, backup, and checksums."""
         t0 = time.time()
         try:
-            abs_path = self._safe_path(path)
+            abs_path = self._safe_path(path, workspace_id)
+            ws_root = self._resolve_workspace_root(workspace_id)
             
             # Prevent direct modifications of workspace metadata db
             if os.path.basename(abs_path) in self.protected_basenames:
@@ -112,7 +135,7 @@ class ToolExecutor:
             # Create backup if file already exists
             backup_file = ""
             if os.path.exists(abs_path):
-                backup_file = self._create_backup(path)
+                backup_file = self._create_backup(path, workspace_id)
 
             # Ensure parent directories exist
             os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -132,17 +155,19 @@ class ToolExecutor:
                 details += f" (Backup created: {os.path.basename(backup_file)})"
             
             self._log_execution(db, task_id, "write", details, "success", elapsed)
+            print(f"[TOOL_EXEC_LOG] workspaceId={workspace_id} workspaceRoot={ws_root} requestedFile={path} toolName=write_file toolResult=SUCCESS", flush=True)
             return {"status": "success", "path": path, "backup": backup_file}
         except Exception as e:
             elapsed = time.time() - t0
             self._log_execution(db, task_id, "write", f"Failed to write file: {path} ({e})", "error", elapsed)
+            print(f"[TOOL_EXEC_LOG] workspaceId={workspace_id} requestedFile={path} toolName=write_file toolResult=FAILED error={e}", flush=True)
             return {"status": "error", "message": str(e)}
 
-    def delete_file(self, db: Session, task_id: str, path: str) -> Dict[str, Any]:
+    def delete_file(self, db: Session, task_id: str, path: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Safely delete a workspace file (moves it to backup)."""
         t0 = time.time()
         try:
-            abs_path = self._safe_path(path)
+            abs_path = self._safe_path(path, workspace_id)
             if os.path.basename(abs_path) in self.protected_basenames:
                 raise PermissionError(f"Delete Denied: Cannot delete protected metadata '{os.path.basename(abs_path)}'.")
 
@@ -150,7 +175,7 @@ class ToolExecutor:
                 raise FileNotFoundError(f"File not found: {path}")
 
             # Backup before deletion
-            backup_file = self._create_backup(path)
+            backup_file = self._create_backup(path, workspace_id)
             os.remove(abs_path)
 
             elapsed = time.time() - t0
@@ -161,12 +186,12 @@ class ToolExecutor:
             self._log_execution(db, task_id, "delete", f"Failed to delete file: {path} ({e})", "error", elapsed)
             return {"status": "error", "message": str(e)}
 
-    def rename_file(self, db: Session, task_id: str, old_path: str, new_path: str) -> Dict[str, Any]:
+    def rename_file(self, db: Session, task_id: str, old_path: str, new_path: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Safely rename or move a file within the workspace."""
         t0 = time.time()
         try:
-            abs_old = self._safe_path(old_path)
-            abs_new = self._safe_path(new_path)
+            abs_old = self._safe_path(old_path, workspace_id)
+            abs_new = self._safe_path(new_path, workspace_id)
 
             if os.path.basename(abs_old) in self.protected_basenames or os.path.basename(abs_new) in self.protected_basenames:
                 raise PermissionError("Rename Denied: Protected file parameters.")
@@ -175,7 +200,7 @@ class ToolExecutor:
                 raise FileNotFoundError(f"File not found: {old_path}")
 
             # Backup old file before moving
-            self._create_backup(old_path)
+            self._create_backup(old_path, workspace_id)
             os.makedirs(os.path.dirname(abs_new), exist_ok=True)
             shutil.move(abs_old, abs_new)
 
@@ -189,11 +214,11 @@ class ToolExecutor:
 
     # ─── Terminal Tool ──────────────────────────────────────────
 
-    def execute_terminal(self, db: Session, task_id: str, command: str) -> Dict[str, Any]:
+    def execute_terminal(self, db: Session, task_id: str, command: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute a terminal command, capturing stdout, stderr, exit code, and execution time."""
         t0 = time.time()
         # White-listed command starts
-        allowed_prefixes = ("npm", "composer", "php", "flutter", "git", "python", "pip")
+        allowed_prefixes = ("npm", "npx", "node", "yarn", "pnpm", "composer", "php", "flutter", "git", "python", "pip", "pytest")
         
         # Simple security parsing
         cmd_words = command.split()
@@ -207,12 +232,22 @@ class ToolExecutor:
             self._log_execution(db, task_id, "terminal", f"Blocked unauthorized command: {command}", "warning", elapsed)
             return {"status": "error", "message": f"Security Alert: Command '{first_word}' is blocked. Only packages, testing, compiling, and git tools are approved."}
 
+        # Check for dangerous / destructive patterns
+        lower_cmd = command.lower()
+        blocked_patterns = ["rm -rf", "format c:", "drop table", "drop database", "git push --force", "git push -f", "git reset --hard"]
+        for pattern in blocked_patterns:
+            if pattern in lower_cmd:
+                elapsed = time.time() - t0
+                self._log_execution(db, task_id, "terminal", f"Blocked destructive command pattern '{pattern}' in: {command}", "warning", elapsed)
+                return {"status": "error", "message": f"Security Alert: Destructive command pattern '{pattern}' is blocked."}
+
+        target_cwd = self._resolve_workspace_root(workspace_id)
         try:
-            # Run command inside workspace root folder
+            # Run command inside target workspace root folder
             res = subprocess.run(
                 command,
                 shell=True,
-                cwd=self.workspace_path,
+                cwd=target_cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -220,7 +255,7 @@ class ToolExecutor:
             )
             elapsed = time.time() - t0
             
-            details = f"Executed terminal command: '{command}' (Exit Code: {res.returncode})"
+            details = f"Executed terminal command: '{command}' in '{target_cwd}' (Exit Code: {res.returncode})"
             status = "success" if res.returncode == 0 else "error"
             self._log_execution(db, task_id, "terminal", details, status, elapsed)
             
@@ -242,7 +277,7 @@ class ToolExecutor:
 
     # ─── Git Tool ───────────────────────────────────────────────
 
-    def execute_git(self, db: Session, task_id: str, action: str, params: Optional[List[str]] = None) -> Dict[str, Any]:
+    def execute_git(self, db: Session, task_id: str, action: str, params: Optional[List[str]] = None, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Interact with git index."""
         t0 = time.time()
         params = params or []
@@ -263,10 +298,11 @@ class ToolExecutor:
             return {"status": "error", "message": f"Unsupported git action: {action}"}
             
         args = ["git"] + git_cmds[action]
+        target_cwd = self._resolve_workspace_root(workspace_id)
         try:
             res = subprocess.run(
                 args,
-                cwd=self.workspace_path,
+                cwd=target_cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True

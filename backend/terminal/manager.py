@@ -85,9 +85,11 @@ class TerminalSessionManager:
     def get_session(self, session_id: str) -> Optional[TerminalSession]:
         session = self.sessions.get(session_id)
         if session:
+            import datetime
             is_alive = session._is_alive()
-            log_lifecycle("MANAGER_GET_CHECK", session_id, f"Found session. is_alive={is_alive}, status={session.status}")
-            if not is_alive:
+            age_seconds = (datetime.datetime.utcnow() - session.created_at).total_seconds()
+            log_lifecycle("MANAGER_GET_CHECK", session_id, f"Found session. is_alive={is_alive}, age={age_seconds:.2f}s, status={session.status}")
+            if not is_alive and age_seconds > 3.0 and session.status != "created":
                 log_lifecycle("MANAGER_PURGE_DEAD_SESSION", session_id, f"Purging dead session during get_session. Status={session.status}")
                 session.close()
                 if session_id in self.sessions:

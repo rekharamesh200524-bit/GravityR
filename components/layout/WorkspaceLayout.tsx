@@ -18,6 +18,7 @@ import { useSettingsStore } from '../../stores/useSettingsStore';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { Database, Plus, Trash2, ShieldCheck, Search, GitBranch, Sparkles, Bookmark, Blocks, Settings } from 'lucide-react';
 import { Button } from '../ui/button';
+import { OpenWorkspaceModal } from '../workspace/OpenWorkspaceModal';
 
 declare global {
   interface Window {
@@ -451,6 +452,7 @@ export const WorkspaceLayout: React.FC = () => {
 
       {/* 4. Footer Status Bar */}
       <StatusBar />
+      <OpenWorkspaceModal />
     </div>
   );
 };

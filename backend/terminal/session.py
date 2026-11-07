@@ -6,6 +6,7 @@ import traceback
 from typing import Callable, Optional, Set
 from .shell_factory import ShellFactory
 from .process_manager import ProcessManager
+from ..services.workspace_manager import workspace_manager
 
 def log_lifecycle(event_type: str, session_id: str, message: str):
     timestamp = datetime.datetime.utcnow().isoformat()
@@ -23,8 +24,9 @@ class TerminalSession:
         self.session_id = session_id
         self.shell_type = shell_type
         
-        default_cwd = "D:\\GravityR"
-        self.working_directory = cwd if cwd and os.path.exists(cwd) else default_cwd
+        active_ws = workspace_manager.get_active_session()
+        fallback_cwd = active_ws.root_path if active_ws else os.getcwd()
+        self.working_directory = cwd if cwd and os.path.exists(cwd) else fallback_cwd
         
         self.created_at = datetime.datetime.utcnow()
         self.last_activity = datetime.datetime.utcnow()
@@ -126,6 +128,8 @@ class TerminalSession:
             
             alive = self._is_alive()
             log_lifecycle("SPAWN_SUCCESS", self.session_id, f"PID: {self.pid}, Process object created: {bool(self.process)}, _is_alive(): {alive}")
+            print(f"[TERMINAL DEBUG] PTY created", flush=True)
+            print(f"[TERMINAL DEBUG] PTY cwd={self.working_directory}", flush=True)
 
             self.status = "running"
             self.read_task = asyncio.create_task(self._read_loop())
@@ -143,7 +147,7 @@ class TerminalSession:
             while self.status == "running" and self.process and self._is_alive():
                 try:
                     if hasattr(self.process, "read"):
-                        data = await asyncio.to_thread(self.process.read, 1024)
+                        data = await asyncio.to_thread(self.process.read, 1024, blocking=False)
                     else:
                         data = ""
 

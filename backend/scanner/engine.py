@@ -111,6 +111,11 @@ def _should_ignore_file(filename: str, file_size: int) -> bool:
         return True
     return False
 
+def _set_scan_status(project_path: str, data: dict):
+    norm_path = os.path.abspath(project_path)
+    SCAN_STATUSES[project_path] = data
+    SCAN_STATUSES[norm_path] = data
+
 def run_scan(project_path: str, project_id: str):
     """
     Single-pass filesystem scanner. Walks the directory tree once, indexes
@@ -118,12 +123,13 @@ def run_scan(project_path: str, project_id: str):
     """
     db: Session = SessionLocal()
     try:
-        SCAN_STATUSES[project_path] = {
+        status_dict = {
             "status": "scanning",
             "processed_files": 0,
             "total_files": 0,
             "error": None
         }
+        _set_scan_status(project_path, status_dict)
         _log("SCAN_STARTED", f"project_id={project_id} path={project_path}")
 
         # ── 1. Load existing DB cache ───────────────────────────────────────
@@ -190,7 +196,8 @@ def run_scan(project_path: str, project_id: str):
                     if abs(db_mtime - modified_at) < 0.01 and db_size == file_size:
                         # Cache hit — no DB write needed
                         processed += 1
-                        SCAN_STATUSES[project_path]["processed_files"] = processed
+                        status_dict["processed_files"] = processed
+                        _set_scan_status(project_path, status_dict)
                         continue
                     else:
                         # File changed — queue for update (do lightweight update)
@@ -220,7 +227,8 @@ def run_scan(project_path: str, project_id: str):
                     _log("NODE_CREATED", f"path={rel_path} lang={lang}")
 
                 processed += 1
-                SCAN_STATUSES[project_path]["processed_files"] = processed
+                status_dict["processed_files"] = processed
+                _set_scan_status(project_path, status_dict)
                 _log("PROGRESS_UPDATED", f"processed={processed} total_files_so_far={total_files}")
 
                 # Batch commit inserts periodically to keep memory footprint low
@@ -278,9 +286,10 @@ def run_scan(project_path: str, project_id: str):
             proj.last_opened = time.strftime('%Y-%m-%d %H:%M:%S')
             db.commit()
 
-        SCAN_STATUSES[project_path]["status"] = "completed"
-        SCAN_STATUSES[project_path]["processed_files"] = processed
-        SCAN_STATUSES[project_path]["total_files"] = total_files
+        status_dict["status"] = "completed"
+        status_dict["processed_files"] = processed
+        status_dict["total_files"] = total_files
+        _set_scan_status(project_path, status_dict)
 
         _log("SCAN_COMPLETED", (
             f"project_id={project_id} total_files={total_files} "
@@ -292,8 +301,9 @@ def run_scan(project_path: str, project_id: str):
         import traceback
         _log("SCAN_COMPLETED", f"ERROR: {type(e).__name__}: {e}\n{traceback.format_exc()}")
         db.rollback()
-        SCAN_STATUSES[project_path]["status"] = "failed"
-        SCAN_STATUSES[project_path]["error"] = str(e)
+        status_dict["status"] = "failed"
+        status_dict["error"] = str(e)
+        _set_scan_status(project_path, status_dict)
     finally:
         db.close()
 

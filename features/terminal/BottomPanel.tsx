@@ -35,7 +35,7 @@ export const BottomPanel: React.FC = () => {
     isCreatingRef.current = true;
 
     try {
-      const cwd = projectPath || 'D:\\GravityR';
+      const cwd = projectPath || undefined;
       const { nextTabNumber } = useTerminalStore.getState();
       const session = await terminalService.createBackendSession('powershell', cwd);
 
@@ -45,7 +45,7 @@ export const BottomPanel: React.FC = () => {
         sessionId: session.session_id,
         name: tabName,
         shellType: session.shell_type || 'powershell',
-        cwd: session.working_directory || cwd,
+        cwd: session.working_directory || projectPath || '',
       };
 
       addTab(newTab);

@@ -102,6 +102,9 @@ interface AgentState {
     };
   } | null;
 
+  workspaceWarning: string | null;
+  clearWorkspaceWarning: () => void;
+
   // Actions
   submitTask: (prompt: string, priority?: QueuePriority) => Promise<void>;
   cancelTask: (taskId: string) => void;
@@ -166,8 +169,28 @@ export const useAgentStore = create<AgentState>((set, get) => {
     availableProviders: [],
     availableModels: [],
     optimizedPrompt: null,
+    workspaceWarning: null,
+    clearWorkspaceWarning: () => set({ workspaceWarning: null }),
 
     submitTask: async (prompt: string, priority: QueuePriority = 'normal') => {
+      // 1. Detect whether a valid workspace is loaded BEFORE starting an Agent Task
+      const { useWorkspaceStore } = await import('./useWorkspaceStore');
+      const workspaceState = useWorkspaceStore.getState();
+
+      const workspaceRoot = workspaceState.workspaceRoot || workspaceState.currentProject?.path || null;
+      const workspaceId = workspaceState.activeWorkspaceId || workspaceState.currentProject?.id || null;
+      const hasWorkspace = Boolean(workspaceRoot && (workspaceId || workspaceRoot));
+
+      if (!hasWorkspace) {
+        const warningMsg = 'Please open a workspace before running an agent task.';
+        set({ workspaceWarning: warningMsg });
+        agentLogger.warn('AgentStore', `Execution halted: ${warningMsg}`);
+        return;
+      }
+
+      // Clear any prior workspace warning
+      set({ workspaceWarning: null });
+
       const task: AgentTask = {
         id: genId(),
         prompt,
@@ -193,10 +216,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
       });
 
       try {
-        const { useWorkspaceStore } = await import('./useWorkspaceStore');
         const { useMemoryStore } = await import('./useMemoryStore');
-        const workspaceState = useWorkspaceStore.getState();
         const memoryState = useMemoryStore.getState();
+        const activeFile = workspaceState.selectedFilePath || workspaceState.activeTab || null;
 
         // Transition states during run setup
         set({ connectionStatus: 'Sending Context' });
@@ -213,6 +235,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
           {
             provider: get().activeProvider,
             workspaceName: workspaceState.currentProject?.name ?? 'GravityX Workspace',
+            workspaceId: workspaceId || undefined,
+            workspaceRoot: workspaceRoot || undefined,
+            activeFile: activeFile || undefined,
             memoryFacts: memoryState.memories.map((m) => m.content),
             projectRules: [
               'Use TypeScript strict mode.',
@@ -229,6 +254,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
           latencyMs: latencyVal
         });
 
+        const isSuccess = result.status === 'completed';
+        const finalStatus = isSuccess ? 'completed' : 'failed';
+        const finalError = isSuccess ? undefined : (result.error || 'Task execution failed');
+
         set((state) => ({
           plannerOutput: result.plannerOutput,
           contextOutput: result.contextOutput,
@@ -237,10 +266,17 @@ export const useAgentStore = create<AgentState>((set, get) => {
           reviewData: result.reviewData,
           timeline: result.timeline,
           currentTask: state.currentTask
-            ? { ...state.currentTask, status: 'completed', completedAt: Date.now() }
+            ? {
+                ...state.currentTask,
+                status: finalStatus,
+                completedAt: Date.now(),
+                errorMessage: finalError,
+              }
             : null,
           queue: state.queue.map((q) =>
-            q.task.id === task.id ? { ...q, task: { ...q.task, status: 'completed' } } : q
+            q.task.id === task.id
+              ? { ...q, task: { ...q.task, status: finalStatus, errorMessage: finalError } }
+              : q
           ),
         }));
       } catch (err) {

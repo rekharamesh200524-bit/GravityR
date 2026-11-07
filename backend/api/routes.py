@@ -1,4 +1,5 @@
 import os
+import asyncio
 import subprocess
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from ..database.connection import get_db
 from ..database.models import Project
 from ..services.workspace import workspace_service
+from ..services.workspace_manager import workspace_manager
 from .agent_routes import router as agent_router
 from .gateway_routes import router as gateway_router
 from .prompt_routes import router as prompt_router
@@ -27,6 +29,10 @@ router.include_router(git_router)
 # Pydantic schemas
 class OpenWorkspaceRequest(BaseModel):
     path: str
+
+class CloseWorkspaceRequest(BaseModel):
+    workspace_id: Optional[str] = None
+    path: Optional[str] = None
 
 class RescanWorkspaceRequest(BaseModel):
     project_id: str
@@ -70,56 +76,56 @@ class RevealRequest(BaseModel):
 
 
 @router.post("/workspace/pick-folder")
-def pick_folder_dialog():
+async def pick_folder_dialog():
     """
-    Triggers a native Windows/OS directory selection dialog on the host system.
-    Ensures the dialog window is explicitly brought to the foreground immediately.
+    Triggers a native Windows/OS directory selection dialog on the host system asynchronously.
+    Ensures the dialog window is explicitly brought to the foreground immediately without blocking Uvicorn.
     Returns the absolute path of the selected folder.
     """
-    # 1. Primary approach: Tkinter with explicit topmost attribute (pops up instantly over browser)
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        root.lift()
-        root.focus_force()
-        selected_path = filedialog.askdirectory(title="Select Project Workspace Folder")
-        root.destroy()
-
-        if selected_path:
-            normalized = os.path.abspath(selected_path)
-            return {"status": "success", "path": normalized}
-        return {"status": "cancelled", "path": None}
-    except Exception as tk_err:
-        print(f"[PICK_FOLDER] Tkinter dialog error, falling back to PowerShell: {tk_err}", flush=True)
-
-    # 2. Fallback on Windows: PowerShell without minimized owner window
-    if os.name == 'nt':
+    def _run_picker():
         try:
-            cmd = (
-                "Add-Type -AssemblyName System.Windows.Forms; "
-                "[System.Windows.Forms.Application]::EnableVisualStyles(); "
-                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                "$f.Description = 'Select Project Workspace Folder'; "
-                "$f.ShowNewFolderButton = $true; "
-                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }"
-            )
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-Command", cmd],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            path = res.stdout.strip()
-            if path:
-                return {"status": "success", "path": os.path.abspath(path)}
-            return {"status": "cancelled", "path": None}
-        except Exception as ps_err:
-            raise HTTPException(status_code=500, detail=f"Failed to open native folder dialog: {str(ps_err)}")
-    
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            root.lift()
+            root.focus_force()
+            selected_path = filedialog.askdirectory(title="Select Project Workspace Folder")
+            root.destroy()
+
+            if selected_path:
+                return os.path.abspath(selected_path)
+        except Exception as tk_err:
+            print(f"[PICK_FOLDER] Tkinter dialog error, falling back to PowerShell: {tk_err}", flush=True)
+
+        if os.name == 'nt':
+            try:
+                cmd = (
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "[System.Windows.Forms.Application]::EnableVisualStyles(); "
+                    "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                    "$f.Description = 'Select Project Workspace Folder'; "
+                    "$f.ShowNewFolderButton = $true; "
+                    "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }"
+                )
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-Command", cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                path = res.stdout.strip()
+                if path:
+                    return os.path.abspath(path)
+            except Exception as ps_err:
+                print(f"[PICK_FOLDER] PowerShell error: {ps_err}", flush=True)
+        return None
+
+    path = await asyncio.to_thread(_run_picker)
+    if path:
+        return {"status": "success", "path": path}
     return {"status": "cancelled", "path": None}
 
 
@@ -129,6 +135,7 @@ def open_workspace(req: OpenWorkspaceRequest, db: Session = Depends(get_db)):
         project = workspace_service.open_workspace(req.path, db)
         return {
             "status": "success",
+            "workspace_id": project.id,
             "project": {
                 "id": project.id,
                 "name": project.name,
@@ -148,6 +155,28 @@ def open_workspace(req: OpenWorkspaceRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to open workspace: {str(e)}")
+
+
+@router.get("/workspace/{workspace_id}")
+def get_workspace_session(workspace_id: str):
+    session = workspace_manager.get_session(workspace_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Workspace session not found: {workspace_id}")
+    return {
+        "status": "success",
+        "workspace": session.to_dict()
+    }
+
+
+@router.post("/workspace/close")
+def close_workspace_endpoint(req: CloseWorkspaceRequest, db: Session = Depends(get_db)):
+    try:
+        target_id = req.workspace_id or req.path
+        if target_id:
+            workspace_service.close_workspace(target_id, db)
+        return {"status": "success", "message": "Workspace session closed successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/workspace/recents")
 def get_recents(db: Session = Depends(get_db)):
@@ -221,7 +250,11 @@ def get_scan_status(path: str = Query(...)):
         status = workspace_service.get_scan_status(path)
         return {"status": "success", "scan": status}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[WORKSPACE] scan-status endpoint warning: {e}", flush=True)
+        return {
+            "status": "success",
+            "scan": {"status": "completed", "processed_files": 0, "total_files": 0, "error": str(e)}
+        }
 
 @router.post("/workspace/file/save")
 def save_file(req: SaveFileRequest, db: Session = Depends(get_db)):

@@ -23,6 +23,9 @@ export interface RecentProjectItem {
 
 interface WorkspaceState {
   currentProject: ProjectMetadata | null;
+  activeWorkspaceId: string | null;
+  workspaceRoot: string | null;
+  projectName: string | null;
   recentProjects: RecentProjectItem[];
   fileTree: FileNode[];
   selectedFilePath: string | null;
@@ -37,6 +40,8 @@ interface WorkspaceState {
   editedFiles: Record<string, string>;
   scanTotalFiles: number;
   workspaceStatus: 'idle' | 'loading' | 'indexing' | 'ready';
+  isFolderModalOpen: boolean;
+  setFolderModalOpen: (open: boolean) => void;
   initWorkspace: () => Promise<void>;
   openWorkspace: (path: string) => Promise<void>;
   fetchRecents: () => Promise<void>;
@@ -73,6 +78,9 @@ let scanPollInterval: NodeJS.Timeout | null = null;
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   currentProject: null,
+  activeWorkspaceId: null,
+  workspaceRoot: null,
+  projectName: null,
   recentProjects: [],
   fileTree: [],
   selectedFilePath: null,
@@ -90,6 +98,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   dirtyFiles: new Set<string>(),
   isSaving: false,
   lastSavedPath: null,
+  isFolderModalOpen: false,
+
+  setFolderModalOpen: (open: boolean) => set({ isFolderModalOpen: open }),
 
   clearError: () => set({ errorMessage: null }),
 
@@ -101,16 +112,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.removeItem('gravityx_last_workspace_path');
     }
+    const { activeWorkspaceId } = get();
+    if (activeWorkspaceId) {
+      fetch(`${API_BASE}/workspace/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: activeWorkspaceId })
+      }).catch(() => {});
+    }
     set({
       currentProject: null,
+      activeWorkspaceId: null,
+      workspaceRoot: null,
+      projectName: null,
       fileTree: [],
       selectedFilePath: null,
       selectedFileContent: null,
       isScanning: false,
       workspaceStatus: 'idle',
-      scanProcessedFiles: 0,
-      scanTotalFiles: 0,
-      errorMessage: null,
       openTabs: [],
       activeTab: null,
       editedFiles: {},
@@ -123,10 +142,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   fetchRecents: async () => {
     try {
       const res = await fetch(`${API_BASE}/workspace/recents`);
-      if (!res.ok) throw new Error("Failed to fetch recent workspaces.");
-      const data = await res.json();
-      if (data.status === "success") {
-        set({ recentProjects: data.projects });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === "success" && Array.isArray(data.recents)) {
+          set({ recentProjects: data.recents });
+        }
       }
     } catch (err: any) {
       console.error(err);
@@ -137,14 +157,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const { currentProject } = get();
     if (!currentProject) return;
 
+    console.log(`[WORKSPACE DEBUG] Explorer loading started`);
     try {
       const res = await fetch(`${API_BASE}/workspace/tree?project_id=${currentProject.id}`);
       if (!res.ok) throw new Error("Failed to load file explorer tree.");
       const data = await res.json();
       if (data.status === "success") {
-        set({ fileTree: data.tree });
+        const treeNodes = Array.isArray(data.tree) ? data.tree : [];
+        set({ fileTree: treeNodes });
+        console.log(`[WORKSPACE DEBUG] Explorer loading completed (${treeNodes.length} top-level nodes)`);
       }
     } catch (err: any) {
+      console.error("fetchTree error:", err);
       set({ errorMessage: err.message });
     }
   },
@@ -218,6 +242,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   openWorkspace: async (path: string) => {
+    console.log(`[WORKSPACE DEBUG] Creating workspace session for path: ${path}`);
     if (scanPollInterval) {
       clearInterval(scanPollInterval);
       scanPollInterval = null;
@@ -226,6 +251,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ isScanning: true, workspaceStatus: 'loading', scanProcessedFiles: 0, errorMessage: null });
 
     try {
+      console.log(`[WORKSPACE DEBUG] Workspace API request -> POST ${API_BASE}/workspace/open`);
       const res = await fetch(`${API_BASE}/workspace/open`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -238,9 +264,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
 
       const data = await res.json();
+      console.log(`[WORKSPACE DEBUG] Workspace API response:`, data);
       if (data.status === "success") {
         const project = data.project as ProjectMetadata;
-        set({ currentProject: project, workspaceStatus: 'indexing' });
+        console.log(`[WORKSPACE DEBUG] Updating workspace store`);
+        console.log(`[WORKSPACE DEBUG] workspace_id=${project.id}`);
+        console.log(`[WORKSPACE DEBUG] root_path=${project.path}`);
+        set({
+          currentProject: project,
+          activeWorkspaceId: project.id,
+          workspaceRoot: project.path,
+          projectName: project.name,
+          workspaceStatus: 'indexing'
+        });
 
         // Save last opened path for 1-click restore
         if (typeof window !== 'undefined') {
@@ -275,7 +311,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                 store.fetchTree().catch(() => {});
               }
               
-              if (scan.status === "completed") {
+              if (scan.status === "completed" || scan.status === "ready" || scan.status === "idle") {
                 if (scanPollInterval) {
                   clearInterval(scanPollInterval);
                   scanPollInterval = null;
@@ -289,7 +325,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                 if (infoRes.ok) {
                   const infoData = await infoRes.json();
                   if (infoData.status === "success") {
-                    set({ currentProject: infoData.info });
+                    set({
+                      currentProject: infoData.info,
+                      activeWorkspaceId: infoData.info.id,
+                      workspaceRoot: infoData.info.path,
+                      projectName: infoData.info.name
+                    });
                   }
                 }
                 

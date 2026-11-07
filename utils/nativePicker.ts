@@ -25,128 +25,42 @@ export const pickNativeFolder = async (): Promise<string | null> => {
     }
   }
 
-  // 2. Local Backend Host - Triggers Windows File Explorer via PowerShell/Tkinter
-  try {
-    // Quick 1s ping to verify backend is up before launching native dialog
-    const pingController = new AbortController();
-    const pingTimeout = setTimeout(() => pingController.abort(), 1000);
-    const pingRes = await fetch(`${API_BASE}/workspace/recents`, { signal: pingController.signal }).catch(() => null);
-    clearTimeout(pingTimeout);
-
-    if (pingRes && pingRes.ok) {
-      // Backend is online — call pick-folder endpoint (allow up to 120s for user interactions)
-      const dialogController = new AbortController();
-      const dialogTimeout = setTimeout(() => dialogController.abort(), 120000);
-
-      const res = await fetch(`${API_BASE}/workspace/pick-folder`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: dialogController.signal,
-      });
-      clearTimeout(dialogTimeout);
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === 'success' && data.path) {
-          return data.path;
+  // 2. Web Browser Native OS File Explorer via showDirectoryPicker (Chrome / Edge / Brave)
+  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
+      if (handle) {
+        if ((handle as any).path && isAbsolutePath((handle as any).path)) {
+          return (handle as any).path;
         }
-        if (data.status === 'cancelled') {
-          return null;
+        const folderName = handle.name || '';
+        if (folderName) {
+          const userPath = window.prompt(
+            `Selected folder '${folderName}'.\n\nPlease confirm or enter the full disk path to this directory:\n(e.g., D:\\Projects\\${folderName} or D:\\${folderName})`,
+            `D:\\${folderName}`
+          );
+          if (userPath && isAbsolutePath(userPath.trim())) {
+            return userPath.trim();
+          }
         }
       }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return null; // User explicitly clicked Cancel in OS dialog
+      }
+      console.warn('showDirectoryPicker error, falling back:', err);
     }
-  } catch (err) {
-    console.warn('Backend pick-folder endpoint offline or unreachable:', err);
   }
 
-  // 3. Web Browser Native OS File Explorer via HTML5 webkitdirectory / showDirectoryPicker
+  // 3. Direct Prompt Fallback: Type or paste full folder path on disk
   if (typeof window !== 'undefined') {
-    // Try modern File System Access API if supported (Chrome/Edge/Brave)
-    if ('showDirectoryPicker' in window) {
-      try {
-        const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
-        if (handle) {
-          // If file path is exposed on handle (e.g. Chrome with local permissions)
-          if ((handle as any).path && isAbsolutePath((handle as any).path)) {
-            return (handle as any).path;
-          }
-          const selectedName = handle.name || '';
-          if (selectedName) {
-            const userPath = window.prompt(
-              `Selected folder '${selectedName}'. Please enter the full path to this directory on disk:`,
-              selectedName
-            );
-            if (userPath && isAbsolutePath(userPath.trim())) {
-              return userPath.trim();
-            }
-          }
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError') {
-          return null; // User explicitly clicked Cancel
-        }
-      }
+    const manualPath = window.prompt(
+      "Open Project Workspace Folder\n\nPlease enter or paste the full absolute path to your project folder on disk:\n(e.g., D:\\Projects\\MyReactApp or D:\\GravityR)",
+      ""
+    );
+    if (manualPath && isAbsolutePath(manualPath.trim())) {
+      return manualPath.trim();
     }
-
-    // Fallback: Invisible HTML input with webkitdirectory to trigger native OS File Explorer window
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      (input as any).webkitdirectory = true;
-      (input as any).directory = true;
-      input.style.display = 'none';
-
-      input.onchange = (e: any) => {
-        const files = e.target.files;
-        if (files && files.length > 0) {
-          const firstFile = files[0];
-          const fullPath = (firstFile as any).path;
-          if (fullPath && isAbsolutePath(fullPath)) {
-            const parts = fullPath.split(/[/\\]/);
-            const relParts = (firstFile.webkitRelativePath || '').split('/');
-            if (relParts.length > 1) {
-              const rootFolderName = relParts[0];
-              const folderIndex = parts.lastIndexOf(rootFolderName);
-              if (folderIndex !== -1) {
-                const folderPath = parts.slice(0, folderIndex + 1).join('\\');
-                if (document.body.contains(input)) document.body.removeChild(input);
-                resolve(folderPath);
-                return;
-              }
-            }
-            if (document.body.contains(input)) document.body.removeChild(input);
-            resolve(fullPath);
-            return;
-          }
-          const relPath = firstFile.webkitRelativePath || '';
-          const rootFolder = relPath.split('/')[0] || '';
-          if (document.body.contains(input)) document.body.removeChild(input);
-
-          if (rootFolder) {
-            const userPath = window.prompt(
-              `Selected folder '${rootFolder}'. Please enter the full path to this directory on disk:`,
-              rootFolder
-            );
-            if (userPath && isAbsolutePath(userPath.trim())) {
-              resolve(userPath.trim());
-              return;
-            }
-          }
-          resolve(null);
-          return;
-        }
-        if (document.body.contains(input)) document.body.removeChild(input);
-        resolve(null);
-      };
-
-      input.oncancel = () => {
-        if (document.body.contains(input)) document.body.removeChild(input);
-        resolve(null);
-      };
-
-      document.body.appendChild(input);
-      input.click();
-    });
   }
 
   return null;

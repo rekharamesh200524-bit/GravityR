@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from ..database.models import Project, RecentProject, RepositoryIndex
 from ..scanner.engine import start_workspace_scan, SCAN_STATUSES
+from .workspace_manager import workspace_manager
 
 class WorkspaceService:
     """
@@ -13,7 +14,7 @@ class WorkspaceService:
     def open_workspace(self, path: str, db: Session) -> Project:
         """
         Validates the path, inserts/updates project and recent project records,
-        and triggers a background repo scan.
+        triggers workspace session registration, and triggers a background repo scan.
         """
         clean_path = path.strip().strip('"\'')
         normalized_path = os.path.abspath(clean_path)
@@ -25,8 +26,8 @@ class WorkspaceService:
         project_name = os.path.basename(normalized_path) or normalized_path.replace(os.path.sep, "_")
         project_id = project_name.lower().replace(" ", "-").replace(":", "")
 
-        # Check if project metadata already exists
-        project = db.query(Project).filter(Project.path == normalized_path).first()
+        # Check if project metadata already exists by ID or Path
+        project = db.query(Project).filter((Project.id == project_id) | (Project.path == normalized_path)).first()
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
 
         if not project:
@@ -39,6 +40,7 @@ class WorkspaceService:
             )
             db.add(project)
         else:
+            project.path = normalized_path
             project.last_opened = timestamp
 
         # Add to recent projects
@@ -56,6 +58,9 @@ class WorkspaceService:
         db.commit()
         db.refresh(project)
 
+        # Register active workspace session
+        workspace_manager.open_session(normalized_path, project.id, project.name)
+
         # Trigger background asynchronous scan
         start_workspace_scan(normalized_path, project.id)
 
@@ -72,7 +77,7 @@ class WorkspaceService:
         """
         Clean up workspace runtime variables.
         """
-        pass
+        workspace_manager.close_session(path)
 
     def trigger_rescan(self, project_id: str, db: Session) -> str:
         """
@@ -88,12 +93,45 @@ class WorkspaceService:
     def get_scan_status(self, path: str) -> Dict[str, Any]:
         """
         Check background scanning progress of a given path.
+        Includes case-insensitive path matching for Windows compatibility and DB completion fallback.
         """
+        if not path:
+            return {"status": "completed", "processed_files": 0, "total_files": 0, "error": None}
+
+        from ..database.connection import SessionLocal
         normalized_path = os.path.abspath(path)
-        status = SCAN_STATUSES.get(normalized_path)
-        if not status:
-            return {"status": "idle", "processed_files": 0, "total_files": 0}
-        return status
+
+        # 1. Direct lookup in memory
+        status = SCAN_STATUSES.get(normalized_path) or SCAN_STATUSES.get(path)
+        if status:
+            return status
+
+        # 2. Case-insensitive path lookup in memory (using list snapshot for thread safety)
+        norm_lower = normalized_path.lower()
+        for k, v in list(SCAN_STATUSES.items()):
+            if os.path.abspath(k).lower() == norm_lower:
+                return v
+
+        # 3. Fallback: check if DB already indexed project files
+        try:
+            project_name = os.path.basename(normalized_path) or normalized_path.replace(os.path.sep, "_")
+            project_id = project_name.lower().replace(" ", "-").replace(":", "")
+            db: Session = SessionLocal()
+            try:
+                proj = db.query(Project).filter((Project.id == project_id) | (Project.path == normalized_path)).first()
+                if proj and proj.total_files > 0:
+                    return {
+                        "status": "completed",
+                        "processed_files": proj.total_files,
+                        "total_files": proj.total_files,
+                        "error": None
+                    }
+            finally:
+                db.close()
+        except Exception as err:
+            print(f"[WORKSPACE] get_scan_status DB fallback error: {err}", flush=True)
+
+        return {"status": "completed", "processed_files": 0, "total_files": 0, "error": None}
 
     def get_file_tree(self, project_id: str, db: Session) -> List[Dict[str, Any]]:
         """

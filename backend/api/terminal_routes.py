@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+import os
 import traceback
 import sys
 from ..terminal.manager import terminal_manager
@@ -10,6 +11,7 @@ from ..terminal.models import (
 )
 from ..terminal.security import is_command_safe
 from ..terminal.shell_factory import ShellFactory
+from ..services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/terminal", tags=["Terminal"])
 
@@ -56,7 +58,16 @@ def log_creation_failure(e: Exception, cwd: str, shell_type: str, session_id: st
 
 @router.post("/create", response_model=TerminalSessionResponse)
 async def create_session(req: TerminalCreateRequest):
-    cwd = req.cwd or "."
+    # Resolve working directory from workspace_manager if possible
+    ws_session = workspace_manager.get_session(req.workspace_id)
+    if ws_session:
+        cwd = ws_session.root_path
+    elif req.cwd and os.path.isabs(req.cwd) and os.path.exists(req.cwd):
+        cwd = req.cwd
+    else:
+        active = workspace_manager.get_active_session()
+        cwd = active.root_path if active else (req.cwd or ".")
+
     shell_type = req.shell_type or "powershell"
     
     print("Creating terminal session...")

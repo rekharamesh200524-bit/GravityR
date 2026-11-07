@@ -4,6 +4,7 @@ from typing import Optional
 class TerminalCreateRequest(BaseModel):
     shell_type: Optional[str] = None  # powershell, cmd, git_bash, bash, zsh
     cwd: Optional[str] = None
+    workspace_id: Optional[str] = None
     cols: Optional[int] = 80
     rows: Optional[int] = 24
 

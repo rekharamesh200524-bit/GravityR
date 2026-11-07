@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Play, X, Settings2, Database, Wifi, Cpu } from 'lucide-react';
+import { Sparkles, Play, X, Settings2, Database, Wifi, Cpu, AlertTriangle } from 'lucide-react';
 import { useAgentStore } from '../../stores/useAgentStore';
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore';
 import type { GatewayProvider, GatewayModel } from '../../stores/useAgentStore';
 import { AgentTimeline } from '../agent/components/AgentTimeline';
 import { AgentQueue } from '../agent/components/AgentQueue';
@@ -38,6 +39,8 @@ export const AiExecutionPanel: React.FC = () => {
     clearQueue,
     setProvider,
     clearLogs,
+    workspaceWarning,
+    clearWorkspaceWarning,
 
     // Gateway states
     gatewayStatus,
@@ -102,9 +105,16 @@ export const AiExecutionPanel: React.FC = () => {
     };
   }, [connectionStatus]);
 
+  const workspaceRoot = useWorkspaceStore((s) => s.workspaceRoot || s.currentProject?.path);
+  const hasWorkspace = Boolean(workspaceRoot);
+
   const handleRunTask = async () => {
     if (!taskPrompt.trim() || isRunning) return;
     const prompt = taskPrompt.trim();
+    if (!hasWorkspace) {
+      await submitTask(prompt);
+      return;
+    }
     setTaskPrompt('');
     setActiveTab('timeline');
     await submitTask(prompt);
@@ -124,7 +134,7 @@ export const AiExecutionPanel: React.FC = () => {
         </span>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => setShowSettings((v: boolean) => !v)}
             className={`p-1.5 rounded transition-colors ${showSettings ? 'text-violet-400 bg-violet-950/20' : 'text-slate-600 hover:text-slate-300'}`}
             title="Provider settings"
           >
@@ -220,6 +230,26 @@ export const AiExecutionPanel: React.FC = () => {
             </span>
           )}
         </div>
+        {/* Workspace Warning Alert */}
+        {workspaceWarning && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+            <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <span className="font-semibold">{workspaceWarning}</span>
+              <p className="text-[10px] text-amber-400/80 mt-0.5 leading-normal">
+                Please open a project directory in the workspace before running an agent task.
+              </p>
+            </div>
+            <button
+              onClick={clearWorkspaceWarning}
+              className="text-amber-400/60 hover:text-amber-200 transition-colors p-0.5"
+              title="Dismiss warning"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-col rounded-lg border border-slate-800 bg-[#0c0e17] p-2 focus-within:border-violet-500/50">
           <textarea
             rows={2}

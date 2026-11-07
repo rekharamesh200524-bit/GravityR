@@ -2,6 +2,19 @@
 // GravityX AI Agent Framework — Core Domain Types
 // ============================================================
 
+export type AgentStateName =
+  | 'PLANNING'
+  | 'ANALYZING'
+  | 'READING'
+  | 'EDITING'
+  | 'EXECUTING'
+  | 'TESTING'
+  | 'FIXING'
+  | 'REVIEWING'
+  | 'WAITING_FOR_APPROVAL'
+  | 'COMPLETED'
+  | 'FAILED';
+
 export type TaskStatus =
   | 'queued'
   | 'planning'
@@ -13,7 +26,45 @@ export type TaskStatus =
   | 'reviewing'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | AgentStateName;
+
+export type ToolName =
+  | 'read_file'
+  | 'write_file'
+  | 'delete_file'
+  | 'rename_file'
+  | 'search_files'
+  | 'run_terminal'
+  | 'git_status'
+  | 'git_diff';
+
+export interface ToolCall {
+  type: 'tool_call';
+  tool: ToolName | string;
+  arguments: Record<string, any>;
+}
+
+export interface ToolResult {
+  success: boolean;
+  tool: string;
+  path?: string;
+  result?: any;
+  error?: string;
+  command?: string;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  durationMs?: number;
+  backup?: string;
+}
+
+export interface AgentObservation {
+  tool: string;
+  arguments: Record<string, any>;
+  result: ToolResult;
+  timestamp: number;
+}
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 

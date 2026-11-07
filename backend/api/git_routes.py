@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.database.connection import get_db
 from backend.database.models import Project
+from backend.services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/git", tags=["git"])
 
@@ -13,52 +14,69 @@ router = APIRouter(prefix="/git", tags=["git"])
 # ── Pydantic request models ──────────────────────────────────────────────────
 
 class GitStageRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     path: str = ""
 
 class GitUnstageRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     path: str = ""
 
 class GitCommitRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     message: str
 
 class GitPushRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     remote: Optional[str] = "origin"
     branch: Optional[str] = None
 
 class GitPullRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     remote: Optional[str] = "origin"
     branch: Optional[str] = None
 
 class GitFetchRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     remote: Optional[str] = "origin"
 
 class GitSyncRequest(BaseModel):
-    project_id: str
+    project_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     remote: Optional[str] = "origin"
     branch: Optional[str] = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_project_path(project_id: str, db: Session) -> str:
-    if db is None:
-        if os.path.exists("D:\\GravityR"):
-            return "D:\\GravityR"
-        return os.getcwd()
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        if os.path.exists("D:\\GravityR"):
-            return "D:\\GravityR"
-        return os.getcwd()
-    if not os.path.exists(project.path):
-        return os.getcwd()
-    return project.path
+def _get_project_path(project_id: Optional[str] = None, workspace_id: Optional[str] = None, db: Optional[Session] = None) -> str:
+    # 1. Try workspace_id lookup in workspace_manager
+    session = workspace_manager.get_session(workspace_id)
+    if session:
+        return session.root_path
+
+    # 2. Try project_id lookup in workspace_manager
+    session_by_pid = workspace_manager.get_session(project_id)
+    if session_by_pid:
+        return session_by_pid.root_path
+
+    # 3. Try database lookup by project_id
+    if db is not None and project_id:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if project and os.path.exists(project.path):
+            return project.path
+
+    # 4. Try current active workspace session
+    active = workspace_manager.get_active_session()
+    if active:
+        return active.root_path
+
+    raise HTTPException(status_code=400, detail="No active workspace session found for Git operation.")
 
 
 def _run_git(args: List[str], cwd: str, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
@@ -82,8 +100,12 @@ def _run_git(args: List[str], cwd: str, env: Optional[Dict[str, str]] = None) ->
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.get("/status")
-def get_git_status(project_id: str = Query(...), db: Session = Depends(get_db)):
-    cwd = _get_project_path(project_id, db)
+def get_git_status(
+    project_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    cwd = _get_project_path(project_id, workspace_id, db)
 
     branch_res = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
     branch = branch_res.stdout.strip() if branch_res.returncode == 0 else "main"
@@ -146,20 +168,25 @@ def get_git_status(project_id: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/diff")
-def get_git_diff(project_id: str = Query(...), db: Session = Depends(get_db)):
-    cwd = _get_project_path(project_id, db)
+def get_git_diff(
+    project_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    cwd = _get_project_path(project_id, workspace_id, db)
     res = _run_git(["diff", "HEAD"], cwd)
     return {"status": "success", "diff": res.stdout}
 
 
 @router.get("/file-content")
 def get_git_file_content(
-    project_id: str = Query(...),
+    project_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
     path: str = Query(...),
     ref: str = Query("HEAD"),
     db: Session = Depends(get_db)
 ):
-    cwd = _get_project_path(project_id, db)
+    cwd = _get_project_path(project_id, workspace_id, db)
     rel_path = path.lstrip("/\\")
 
     head_res = _run_git(["show", f"{ref}:{rel_path}"], cwd)
@@ -183,11 +210,12 @@ def get_git_file_content(
 
 @router.get("/file-history")
 def get_git_file_history(
-    project_id: str = Query(...),
+    project_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
     path: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    cwd = _get_project_path(project_id, db)
+    cwd = _get_project_path(project_id, workspace_id, db)
     rel_path = path.lstrip("/\\")
     res = _run_git(["log", "-n", "15", "--pretty=format:%h|%an|%ar|%s", "--", rel_path], cwd)
 
@@ -211,7 +239,7 @@ def get_git_file_history(
 
 @router.post("/stage")
 def stage_file(req: GitStageRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     target = req.path.lstrip("/\\") if req.path else "."
     print(f"[GIT_STAGE] [GIT_ADD_STARTED] project_id={req.project_id} target={target}", flush=True)
     res = _run_git(["add", target], cwd)
@@ -225,7 +253,7 @@ def stage_file(req: GitStageRequest, db: Session = Depends(get_db)):
 
 @router.post("/unstage")
 def unstage_file(req: GitUnstageRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     if req.path:
         target = req.path.lstrip("/\\")
         res = _run_git(["restore", "--staged", target], cwd)
@@ -245,7 +273,7 @@ def unstage_file(req: GitUnstageRequest, db: Session = Depends(get_db)):
 def commit_changes(req: GitCommitRequest, db: Session = Depends(get_db)):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Commit message cannot be empty.")
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
 
     print(f"[GIT_COMMIT] [COMMIT_STARTED] project_id={req.project_id} message={req.message.strip()}", flush=True)
     res = _run_git(["commit", "-m", req.message.strip()], cwd)
@@ -264,7 +292,7 @@ def commit_changes(req: GitCommitRequest, db: Session = Depends(get_db)):
 
 @router.post("/push")
 def push_changes(req: GitPushRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     remote = req.remote or "origin"
     branch = req.branch
     if not branch:
@@ -306,7 +334,7 @@ def push_changes(req: GitPushRequest, db: Session = Depends(get_db)):
 
 @router.post("/pull")
 def pull_changes(req: GitPullRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     remote = req.remote or "origin"
     branch = req.branch
     if not branch:
@@ -334,7 +362,7 @@ def pull_changes(req: GitPullRequest, db: Session = Depends(get_db)):
 
 @router.post("/fetch")
 def fetch_changes(req: GitFetchRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     remote = req.remote or "origin"
     res = _run_git(["fetch", remote], cwd)
     if res.returncode != 0:
@@ -344,7 +372,7 @@ def fetch_changes(req: GitFetchRequest, db: Session = Depends(get_db)):
 
 @router.post("/sync")
 def sync_changes(req: GitSyncRequest, db: Session = Depends(get_db)):
-    cwd = _get_project_path(req.project_id, db)
+    cwd = _get_project_path(req.project_id, req.workspace_id, db)
     remote = req.remote or "origin"
     branch = req.branch
     if not branch:

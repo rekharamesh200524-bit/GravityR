@@ -389,7 +389,7 @@ const FileNodeItem: React.FC<FileNodeItemProps> = ({
 
 export const FileExplorer: React.FC = () => {
   const { 
-    currentProject, fileTree, isScanning, scanProcessedFiles, scanTotalFiles,
+    currentProject, fileTree = [], isScanning, scanProcessedFiles, scanTotalFiles,
     triggerRescan, errorMessage, clearError, openTab, openWorkspace,
     createFile, createFolder, renameNode, deleteNode, moveNode, duplicateFile, revealInExplorer, fetchTree
   } = useWorkspaceStore();
@@ -683,7 +683,7 @@ export const FileExplorer: React.FC = () => {
         }}
       >
         {currentProject ? (
-          fileTree.length > 0 ? (
+          (fileTree?.length ?? 0) > 0 ? (
             <>
               {/* Phantom row for creation at root level */}
               {creatingInFolder && creatingInFolder.parentPath === '/' && (
@@ -697,7 +697,7 @@ export const FileExplorer: React.FC = () => {
                 </div>
               )}
 
-              {fileTree.map((node) => (
+              {(fileTree || []).map((node) => (
                 <FileNodeItem
                   key={node.path}
                   node={node}
@@ -733,9 +733,9 @@ export const FileExplorer: React.FC = () => {
             <Button
               variant="primary"
               size="sm"
-              onClick={async () => {
-                const path = await pickNativeFolder();
-                if (path) await openWorkspace(path);
+              onClick={() => {
+                console.log('[WORKSPACE DEBUG] Open Folder clicked');
+                useWorkspaceStore.getState().setFolderModalOpen(true);
               }}
               className="mt-1 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 cursor-pointer"
             >

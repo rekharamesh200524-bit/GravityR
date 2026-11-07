@@ -3,6 +3,7 @@ import type {
   PlannerOutput,
   PromptObject,
   PromptSection,
+  AgentObservation,
 } from './types';
 
 const CHARS_PER_TOKEN = 4;
@@ -13,35 +14,59 @@ function countTokens(text: string): number {
 }
 
 // ─── System prompt template ───────────────────────────────────
-const SYSTEM_PROMPT = `You are GravityX, an expert AI software engineer embedded inside a professional IDE.
+const SYSTEM_PROMPT = `You are GravityX, an expert autonomous AI coding agent embedded inside a professional IDE.
 
-Your responsibilities:
-1. Analyze the user's coding request carefully.
-2. Produce precise, production-quality code changes.
-3. Respect the existing architecture, coding style, and conventions.
-4. Only modify what is necessary — do not over-engineer.
-5. Always provide complete file contents for modified files.
-6. Include TypeScript types, error handling, and comments where appropriate.
-7. Flag any risks, breaking changes, or ambiguities in a "review_notes" field.
+Your workflow:
+USER PROMPT → PLAN → INSPECT FILES → DECIDE ACTION → EXECUTE TOOL → OBSERVE RESULT → TEST → FIX ERRORS → COMPLETE
 
-Output format must be valid JSON:
+Available Tools:
+1. \`read_file\`: { "path": string } - Read file content
+2. \`write_file\`: { "path": string, "content": string } - Create or overwrite a file with full content
+3. \`delete_file\`: { "path": string } - Delete a file
+4. \`rename_file\`: { "old_path": string, "new_path": string } - Move or rename a file
+5. \`search_files\`: { "query": string } - Search text inside project workspace files
+6. \`run_terminal\`: { "command": string } - Run build, test, lint or package commands (npm, npx, node, yarn, python, git)
+7. \`git_status\`: {} - View git working tree status
+8. \`git_diff\`: {} - View git diff of changes
+
+When you need to execute a tool, respond with valid JSON:
 {
+  "type": "tool_call",
+  "tool": "read_file" | "write_file" | "delete_file" | "rename_file" | "search_files" | "run_terminal" | "git_status" | "git_diff",
+  "arguments": { ... }
+}
+
+When all changes are made and verified:
+{
+  "type": "complete",
   "summary": "...",
-  "files": [
-    { "path": "...", "content": "..." }
-  ],
-  "review_notes": "...",
-  "warnings": ["..."]
+  "review_notes": "..."
+}
+
+If you need user clarification:
+{
+  "type": "clarification",
+  "question": "..."
 }`;
 
 // ─── PromptBuilder ────────────────────────────────────────────
 export class PromptBuilder {
   private workspaceName = 'GravityX Workspace';
+  private workspaceRoot?: string;
+  private activeFile?: string | null;
   private projectRules: string[] = [];
   private memoryFacts: string[] = [];
 
   setWorkspaceName(name: string): void {
     this.workspaceName = name;
+  }
+
+  setWorkspaceRoot(root?: string): void {
+    this.workspaceRoot = root;
+  }
+
+  setActiveFile(file?: string | null): void {
+    this.activeFile = file;
   }
 
   setProjectRules(rules: string[]): void {
@@ -57,6 +82,7 @@ export class PromptBuilder {
     userPrompt: string,
     contextOutput: ContextBuildOutput,
     plannerOutput: PlannerOutput,
+    observations: AgentObservation[] = [],
   ): PromptObject {
     const sections: PromptSection[] = [];
 
@@ -70,7 +96,9 @@ export class PromptBuilder {
 
     // ─── Workspace metadata section
     const workspaceMeta = [
-      `Workspace: ${this.workspaceName}`,
+      `Workspace Name: ${this.workspaceName}`,
+      `Workspace Root: ${this.workspaceRoot || 'Not specified'}`,
+      `Active Open File: ${this.activeFile || 'None'}`,
       `Complexity: ${plannerOutput.estimatedComplexity}`,
       `Risk Level: ${plannerOutput.riskLevel}`,
       `Files in context: ${contextOutput.files.length}`,
@@ -133,6 +161,20 @@ export class PromptBuilder {
       content: planContent,
       tokenCount: countTokens(planContent),
     });
+
+    // ─── Observations / Tool results history section
+    if (observations.length > 0) {
+      const obsContent = observations.map((o, idx) => {
+        const status = o.result.success ? 'SUCCESS' : 'FAILED';
+        return `[Step ${idx + 1}] Tool: ${o.tool}\nArguments: ${JSON.stringify(o.arguments)}\nStatus: ${status}\nResult: ${JSON.stringify(o.result.result || o.result.error || o.result.stdout || o.result.stderr || '')}`;
+      }).join('\n\n');
+      sections.push({
+        role: 'context',
+        label: 'Tool Execution History & Observations',
+        content: obsContent,
+        tokenCount: countTokens(obsContent),
+      });
+    }
 
     // ─── User instruction section
     sections.push({

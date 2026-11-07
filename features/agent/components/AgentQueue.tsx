@@ -10,7 +10,7 @@ interface AgentQueueProps {
   onCancel: (taskId: string) => void;
 }
 
-const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string; icon: React.ReactNode }> = {
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   queued:              { label: 'Queued',    color: 'text-amber-400 bg-amber-950/30 border-amber-500/20',  icon: <Clock className="h-3 w-3" /> },
   planning:            { label: 'Running',   color: 'text-violet-400 bg-violet-950/30 border-violet-500/20', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
   searching:           { label: 'Running',   color: 'text-violet-400 bg-violet-950/30 border-violet-500/20', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
@@ -48,7 +48,7 @@ export const AgentQueue: React.FC<AgentQueueProps> = ({ queue, onCancel }) => {
 
       <div className="divide-y divide-slate-900/60 max-h-48 overflow-y-auto">
         {[...running, ...waiting, ...done].map((item) => {
-          const config = STATUS_CONFIG[item.task.status];
+          const config = STATUS_CONFIG[item.task.status.toLowerCase()] || STATUS_CONFIG['planning'];
           const isActive = !['completed', 'failed', 'cancelled', 'queued'].includes(item.task.status);
           return (
             <motion.div

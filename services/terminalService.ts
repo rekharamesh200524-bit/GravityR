@@ -1,4 +1,5 @@
 import { useTerminalStore } from '../stores/useTerminalStore';
+import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 
 export interface BackendTerminalSession {
   session_id: string;
@@ -56,17 +57,20 @@ export class TerminalService {
    * Spawns a new isolated terminal session on the backend.
    */
   public async createBackendSession(shellType: string = 'powershell', cwd?: string): Promise<BackendTerminalSession> {
-    const defaultCwd = 'D:\\GravityR';
-    const targetCwd = cwd || defaultCwd;
+    const activeProject = useWorkspaceStore.getState().currentProject;
+    const targetCwd = cwd || activeProject?.path || '';
 
-    console.log(`[TERMINAL SERVICE] Creating backend session: shellType=${shellType}, cwd=${targetCwd}`);
+    console.log(`[TERMINAL DEBUG] Creating terminal session`);
+    console.log(`[TERMINAL DEBUG] workspace_id=${activeProject?.id || 'none'}`);
+    console.log(`[TERMINAL DEBUG] cwd=${targetCwd || 'default'}`);
 
     const response = await fetch(`${this.apiBase}/terminal/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         shell_type: shellType,
-        cwd: targetCwd,
+        cwd: targetCwd || undefined,
+        workspace_id: activeProject?.id,
         cols: 80,
         rows: 24,
       }),
@@ -77,7 +81,7 @@ export class TerminalService {
     }
 
     const data = await response.json();
-    console.log(`[TERMINAL SERVICE] Session created: ${data.session_id}, PID: ${data.pid}`);
+    console.log(`[TERMINAL DEBUG] Session created: ${data.session_id}`);
     return data;
   }
 
