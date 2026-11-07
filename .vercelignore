@@ -1,0 +1,16 @@
+# Backend and database
+backend/
+*.db
+*.sqlite3
+__pycache__/
+*.pyc
+
+# Electron and temp files
+chrome-temp-profile/
+chrome-stdout.log
+*.log
+
+# Tests
+tests/
+test_*.py
+test_sample_workspace/
