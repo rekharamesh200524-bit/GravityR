@@ -14,3 +14,4 @@ chrome-stdout.log
 tests/
 test_*.py
 test_sample_workspace/
+
