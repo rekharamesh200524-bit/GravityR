@@ -5,7 +5,7 @@ import { X, File, FileJson, FileCode, BookOpen, Pin } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore';
 
 export const EditorTabs: React.FC = () => {
-  const { openTabs, activeTab, setActiveTab, closeTab } = useWorkspaceStore();
+  const { openTabs, activeTab, setActiveTab, closeTab, dirtyFiles } = useWorkspaceStore();
   const [pinnedTabs, setPinnedTabs] = useState<string[]>([]);
 
   if (openTabs.length === 0) return null;
@@ -69,15 +69,22 @@ export const EditorTabs: React.FC = () => {
             {/* Pin indicator */}
             {isPinned && <Pin className="h-2.5 w-2.5 text-violet-400 rotate-45" />}
 
-            {/* Close tab */}
+            {/* Dirty / Close indicator */}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(tabPath);
               }}
-              className="rounded p-0.5 hover:bg-slate-800 text-slate-500 hover:text-slate-200 opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+              className="rounded p-0.5 hover:bg-slate-800 text-slate-500 hover:text-slate-200 transition-opacity ml-1 relative w-4 h-4 flex items-center justify-center"
+              title={dirtyFiles.has(tabPath) ? 'Unsaved changes — Ctrl+S to save' : 'Close tab'}
             >
-              <X className="h-3 w-3" />
+              {dirtyFiles.has(tabPath) ? (
+                // Amber dot for unsaved; switches to × on hover
+                <span className="group-hover:hidden flex items-center justify-center">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                </span>
+              ) : null}
+              <X className={`h-3 w-3 ${dirtyFiles.has(tabPath) ? 'hidden group-hover:block' : 'opacity-0 group-hover:opacity-100'}`} />
             </button>
           </div>
         );

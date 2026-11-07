@@ -57,6 +57,18 @@ export const BottomPanel: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectPath, addTab]);
 
+  // Listen for workspace CWD change events
+  useEffect(() => {
+    const handleCwdChange = (e: any) => {
+      const newPath = e.detail?.path;
+      if (newPath) {
+        terminalService.handleInput(`cd "${newPath}"\r`);
+      }
+    };
+    window.addEventListener('workspace-cwd-changed', handleCwdChange);
+    return () => window.removeEventListener('workspace-cwd-changed', handleCwdChange);
+  }, []);
+
   // Ensure at least one terminal tab exists on mount. Use a separate ref-based
   // guard so this never runs more than once per mount even in Strict Mode.
   const didAutoCreateRef = useRef(false);

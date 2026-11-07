@@ -15,7 +15,8 @@ class WorkspaceService:
         Validates the path, inserts/updates project and recent project records,
         and triggers a background repo scan.
         """
-        normalized_path = os.path.abspath(path)
+        clean_path = path.strip().strip('"\'')
+        normalized_path = os.path.abspath(clean_path)
         if not os.path.exists(normalized_path):
             raise FileNotFoundError(f"Directory path does not exist: {path}")
         if not os.path.isdir(normalized_path):
@@ -91,7 +92,7 @@ class WorkspaceService:
         normalized_path = os.path.abspath(path)
         status = SCAN_STATUSES.get(normalized_path)
         if not status:
-            return {"status": "idle", "processed_files": 0}
+            return {"status": "idle", "processed_files": 0, "total_files": 0}
         return status
 
     def get_file_tree(self, project_id: str, db: Session) -> List[Dict[str, Any]]:
@@ -178,5 +179,314 @@ class WorkspaceService:
             }
         except Exception as e:
             raise IOError(f"Failed to read file: {str(e)}")
+
+    def write_file_content(self, project_id: str, file_path: str, content: str, db: Session) -> Dict[str, Any]:
+        """
+        Writes content to the file on disk and updates the RepositoryIndex cache entry.
+        Security: validates the resolved absolute path is inside the project root.
+        """
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        # Security: resolve and bound-check
+        abs_path = os.path.abspath(os.path.join(project.path, file_path.lstrip("/")))
+        if not abs_path.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: File is outside project directory bounds.")
+
+        # Fetch existing encoding from index, default utf-8
+        idx_entry = db.query(RepositoryIndex).filter(
+            RepositoryIndex.project_id == project_id,
+            RepositoryIndex.path == file_path
+        ).first()
+        encoding = idx_entry.encoding if idx_entry else "utf-8"
+
+        # Write file to disk
+        try:
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "w", encoding=encoding, errors="replace", newline="") as f:
+                f.write(content)
+        except Exception as e:
+            raise IOError(f"Failed to write file: {str(e)}")
+
+        # Update RepositoryIndex cache so next scan is a cache-hit
+        try:
+            stat = os.stat(abs_path)
+            new_mtime = stat.st_mtime
+            new_size = stat.st_size
+            if idx_entry:
+                idx_entry.modified_at = new_mtime
+                idx_entry.size_bytes = new_size
+                db.commit()
+        except Exception:
+            pass  # Non-fatal: scanner will fix on next pass
+
+        saved_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        return {
+            "path": file_path,
+            "size_bytes": os.path.getsize(abs_path),
+            "saved_at": saved_at
+        }
+
+    def create_file(self, project_id: str, file_path: str, content: str = "", db: Session = None) -> Dict[str, Any]:
+        """Creates a new file on disk and adds it to RepositoryIndex."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_path = file_path.lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(project.path, clean_path))
+        if not abs_path.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: Path outside project bounds.")
+
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, "w", encoding="utf-8", errors="replace") as f:
+            f.write(content)
+
+        rel_path = "/" + clean_path.replace(os.path.sep, "/")
+        parent_path = "/" + os.path.dirname(clean_path).replace(os.path.sep, "/")
+        if parent_path == "/.":
+            parent_path = "/"
+
+        stat_info = os.stat(abs_path)
+        ext = os.path.splitext(os.path.basename(abs_path))[1].lower()
+
+        new_id = f"{project_id}:{rel_path}"
+        existing_record = db.query(RepositoryIndex).filter(RepositoryIndex.id == new_id).first()
+        if existing_record:
+            existing_record.size_bytes = stat_info.st_size
+            existing_record.modified_at = stat_info.st_mtime
+            existing_record.encoding = "utf-8"
+        else:
+            new_record = RepositoryIndex(
+                id=new_id,
+                project_id=project_id,
+                path=rel_path,
+                name=os.path.basename(abs_path),
+                is_folder=False,
+                extension=ext,
+                size_bytes=stat_info.st_size,
+                modified_at=stat_info.st_mtime,
+                encoding="utf-8",
+                language="plaintext",
+                parent_path=parent_path
+            )
+            db.add(new_record)
+        db.commit()
+
+        return {"path": rel_path, "abs_path": abs_path}
+
+    def create_folder(self, project_id: str, folder_path: str, db: Session = None) -> Dict[str, Any]:
+        """Creates a new directory on disk."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_path = folder_path.lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(project.path, clean_path))
+        if not abs_path.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: Path outside project bounds.")
+
+        os.makedirs(abs_path, exist_ok=True)
+        rel_path = "/" + clean_path.replace(os.path.sep, "/")
+        return {"path": rel_path, "abs_path": abs_path}
+
+    def rename_node(self, project_id: str, old_path: str, new_name: str, db: Session = None) -> Dict[str, Any]:
+        """Renames a file or folder on disk and updates RepositoryIndex entries."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_old = old_path.lstrip("/\\")
+        abs_old = os.path.abspath(os.path.join(project.path, clean_old))
+        if not abs_old.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: Path outside project bounds.")
+
+        if not os.path.exists(abs_old):
+            raise FileNotFoundError(f"Path does not exist: {old_path}")
+
+        parent_dir = os.path.dirname(abs_old)
+        abs_new = os.path.join(parent_dir, new_name)
+        if os.path.exists(abs_new):
+            raise FileExistsError(f"Target name already exists: {new_name}")
+
+        os.rename(abs_old, abs_new)
+
+        rel_old = "/" + clean_old.replace(os.path.sep, "/")
+        rel_parent = "/" + os.path.relpath(parent_dir, project.path).replace(os.path.sep, "/")
+        if rel_parent == "/.":
+            rel_parent = "/"
+        rel_new = (rel_parent.rstrip("/") + "/" + new_name).replace("//", "/")
+
+        # Update DB entries
+        entries = db.query(RepositoryIndex).filter(
+            RepositoryIndex.project_id == project_id,
+            RepositoryIndex.path.startswith(rel_old)
+        ).all()
+
+        for entry in entries:
+            old_entry_path = entry.path
+            new_entry_path = rel_new + old_entry_path[len(rel_old):]
+            entry.path = new_entry_path
+            entry.id = f"{project_id}:{new_entry_path}"
+            if old_entry_path == rel_old:
+                entry.name = new_name
+                entry.extension = os.path.splitext(new_name)[1].lower()
+
+        db.commit()
+        return {"old_path": rel_old, "new_path": rel_new}
+
+    def delete_node(self, project_id: str, node_path: str, db: Session = None) -> Dict[str, Any]:
+        """Deletes a file or directory recursively on disk and removes DB index records."""
+        import shutil
+
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_path = node_path.lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(project.path, clean_path))
+        if not abs_path.startswith(os.path.abspath(project.path)) or abs_path == os.path.abspath(project.path):
+            raise PermissionError("Access denied: Invalid delete path.")
+
+        if not os.path.exists(abs_path):
+            raise FileNotFoundError(f"Path does not exist: {node_path}")
+
+        if os.path.isdir(abs_path):
+            shutil.rmtree(abs_path)
+        else:
+            os.remove(abs_path)
+
+        rel_path = "/" + clean_path.replace(os.path.sep, "/")
+
+        # Delete DB records
+        db.query(RepositoryIndex).filter(
+            RepositoryIndex.project_id == project_id,
+            RepositoryIndex.path.startswith(rel_path)
+        ).delete(synchronize_session=False)
+        db.commit()
+
+        return {"deleted_path": rel_path}
+
+    def move_node(self, project_id: str, src_path: str, dest_folder: str, db: Session = None) -> Dict[str, Any]:
+        """Moves a file or folder into dest_folder using shutil.move."""
+        import shutil
+
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_src = src_path.lstrip("/\\")
+        clean_dest = dest_folder.lstrip("/\\")
+
+        abs_src = os.path.abspath(os.path.join(project.path, clean_src))
+        abs_dest_dir = os.path.abspath(os.path.join(project.path, clean_dest))
+
+        if not abs_src.startswith(os.path.abspath(project.path)) or not abs_dest_dir.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: Path outside project bounds.")
+
+        if not os.path.exists(abs_src):
+            raise FileNotFoundError(f"Source does not exist: {src_path}")
+        if not os.path.exists(abs_dest_dir) or not os.path.isdir(abs_dest_dir):
+            raise NotADirectoryError(f"Destination folder does not exist: {dest_folder}")
+
+        filename = os.path.basename(abs_src)
+        abs_target = os.path.join(abs_dest_dir, filename)
+        if os.path.exists(abs_target):
+            raise FileExistsError(f"Destination already contains: {filename}")
+
+        shutil.move(abs_src, abs_target)
+
+        rel_src = "/" + clean_src.replace(os.path.sep, "/")
+        rel_dest = ("/" + clean_dest + "/" + filename).replace("//", "/")
+
+        # Update DB entries
+        entries = db.query(RepositoryIndex).filter(
+            RepositoryIndex.project_id == project_id,
+            RepositoryIndex.path.startswith(rel_src)
+        ).all()
+
+        for entry in entries:
+            old_entry_path = entry.path
+            new_entry_path = rel_dest + old_entry_path[len(rel_src):]
+            entry.path = new_entry_path
+            entry.id = f"{project_id}:{new_entry_path}"
+
+        db.commit()
+        return {"src_path": rel_src, "dest_path": rel_dest}
+
+    def duplicate_file(self, project_id: str, file_path: str, db: Session = None) -> Dict[str, Any]:
+        """Duplicates a file by creating filename_copy.ext."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_path = file_path.lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(project.path, clean_path))
+        if not abs_path.startswith(os.path.abspath(project.path)):
+            raise PermissionError("Access denied: Path outside project bounds.")
+
+        if not os.path.exists(abs_path) or os.path.isdir(abs_path):
+            raise FileNotFoundError(f"File does not exist: {file_path}")
+
+        dir_name = os.path.dirname(abs_path)
+        base_name, ext = os.path.splitext(os.path.basename(abs_path))
+
+        copy_idx = 1
+        new_filename = f"{base_name}_copy{ext}"
+        new_abs_path = os.path.join(dir_name, new_filename)
+        while os.path.exists(new_abs_path):
+            copy_idx += 1
+            new_filename = f"{base_name}_copy{copy_idx}{ext}"
+            new_abs_path = os.path.join(dir_name, new_filename)
+
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as src_f:
+            content = src_f.read()
+
+        with open(new_abs_path, "w", encoding="utf-8", errors="replace") as dest_f:
+            dest_f.write(content)
+
+        parent_rel = "/" + os.path.relpath(dir_name, project.path).replace(os.path.sep, "/")
+        if parent_rel == "/.":
+            parent_rel = "/"
+        new_rel_path = (parent_rel.rstrip("/") + "/" + new_filename).replace("//", "/")
+
+        stat_info = os.stat(new_abs_path)
+        new_id = f"{project_id}:{new_rel_path}"
+        new_record = RepositoryIndex(
+            id=new_id,
+            project_id=project_id,
+            path=new_rel_path,
+            name=new_filename,
+            is_folder=False,
+            extension=ext.lower(),
+            size_bytes=stat_info.st_size,
+            modified_at=stat_info.st_mtime,
+            encoding="utf-8",
+            language="plaintext",
+            parent_path=parent_rel
+        )
+        db.add(new_record)
+        db.commit()
+
+        return {"new_path": new_rel_path}
+
+    def reveal_in_explorer(self, project_id: str, file_path: str, db: Session = None) -> Dict[str, Any]:
+        """Opens Windows Explorer with the file selected."""
+        import subprocess
+
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise KeyError("Project workspace not initialized.")
+
+        clean_path = file_path.lstrip("/\\")
+        abs_path = os.path.abspath(os.path.join(project.path, clean_path))
+
+        if not os.path.exists(abs_path):
+            abs_path = os.path.abspath(project.path)
+
+        subprocess.Popen(["explorer", "/select,", abs_path])
+        return {"revealed": abs_path}
+
 
 workspace_service = WorkspaceService()

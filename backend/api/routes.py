@@ -1,7 +1,9 @@
+import os
+import subprocess
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from ..database.connection import get_db
 from ..database.models import Project
@@ -11,6 +13,7 @@ from .gateway_routes import router as gateway_router
 from .prompt_routes import router as prompt_router
 from .tool_routes import router as tool_router
 from .terminal_routes import router as terminal_router
+from .git_routes import router as git_router
 
 router = APIRouter()
 router.include_router(agent_router)
@@ -18,6 +21,7 @@ router.include_router(gateway_router)
 router.include_router(prompt_router)
 router.include_router(tool_router)
 router.include_router(terminal_router)
+router.include_router(git_router)
 
 
 # Pydantic schemas
@@ -26,6 +30,98 @@ class OpenWorkspaceRequest(BaseModel):
 
 class RescanWorkspaceRequest(BaseModel):
     project_id: str
+
+class SaveFileRequest(BaseModel):
+    project_id: str
+    path: str
+    content: str
+
+class CreateFileRequest(BaseModel):
+    project_id: str
+    path: str
+    content: str = ""
+
+class CreateFolderRequest(BaseModel):
+    project_id: str
+    path: str
+
+class RenameNodeRequest(BaseModel):
+    project_id: str
+    old_path: str
+    new_name: str
+
+class DeleteNodeRequest(BaseModel):
+    project_id: str
+    path: str
+
+class MoveNodeRequest(BaseModel):
+    project_id: str
+    src_path: str
+    dest_folder: str
+
+class DuplicateFileRequest(BaseModel):
+    project_id: str
+    path: str
+
+class RevealRequest(BaseModel):
+    project_id: str
+    path: str
+
+
+
+@router.post("/workspace/pick-folder")
+def pick_folder_dialog():
+    """
+    Triggers a native Windows/OS directory selection dialog on the host system.
+    Ensures the dialog window is explicitly brought to the foreground immediately.
+    Returns the absolute path of the selected folder.
+    """
+    # 1. Primary approach: Tkinter with explicit topmost attribute (pops up instantly over browser)
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.lift()
+        root.focus_force()
+        selected_path = filedialog.askdirectory(title="Select Project Workspace Folder")
+        root.destroy()
+
+        if selected_path:
+            normalized = os.path.abspath(selected_path)
+            return {"status": "success", "path": normalized}
+        return {"status": "cancelled", "path": None}
+    except Exception as tk_err:
+        print(f"[PICK_FOLDER] Tkinter dialog error, falling back to PowerShell: {tk_err}", flush=True)
+
+    # 2. Fallback on Windows: PowerShell without minimized owner window
+    if os.name == 'nt':
+        try:
+            cmd = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "[System.Windows.Forms.Application]::EnableVisualStyles(); "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$f.Description = 'Select Project Workspace Folder'; "
+                "$f.ShowNewFolderButton = $true; "
+                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }"
+            )
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-Command", cmd],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            path = res.stdout.strip()
+            if path:
+                return {"status": "success", "path": os.path.abspath(path)}
+            return {"status": "cancelled", "path": None}
+        except Exception as ps_err:
+            raise HTTPException(status_code=500, detail=f"Failed to open native folder dialog: {str(ps_err)}")
+    
+    return {"status": "cancelled", "path": None}
+
 
 @router.post("/workspace/open")
 def open_workspace(req: OpenWorkspaceRequest, db: Session = Depends(get_db)):
@@ -65,6 +161,7 @@ def get_recents(db: Session = Depends(get_db)):
 def get_file_tree(project_id: str = Query(...), db: Session = Depends(get_db)):
     try:
         tree = workspace_service.get_file_tree(project_id, db)
+        print(f"[SCANNER] [TREE_SENT_TO_FRONTEND] project_id={project_id} root_nodes={len(tree)}", flush=True)
         return {"status": "success", "tree": tree}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -125,3 +222,89 @@ def get_scan_status(path: str = Query(...)):
         return {"status": "success", "scan": status}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/file/save")
+def save_file(req: SaveFileRequest, db: Session = Depends(get_db)):
+    try:
+        print(f"[WORKSPACE] [FILE_SAVE_STARTED] project_id={req.project_id} path={req.path}", flush=True)
+        result = workspace_service.write_file_content(req.project_id, req.path, req.content, db)
+        print(f"[WORKSPACE] [FILE_SAVE_SUCCESS] project_id={req.project_id} path={req.path}", flush=True)
+        return {"status": "success", **result}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/create-file")
+def create_file_endpoint(req: CreateFileRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.create_file(req.project_id, req.path, req.content or "", db)
+        return {"status": "success", **res}
+    except FileExistsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/create-folder")
+def create_folder_endpoint(req: CreateFolderRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.create_folder(req.project_id, req.path, db)
+        return {"status": "success", **res}
+    except FileExistsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/rename")
+def rename_node_endpoint(req: RenameNodeRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.rename_node(req.project_id, req.old_path, req.new_name, db)
+        return {"status": "success", **res}
+    except (FileNotFoundError, FileExistsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/delete")
+def delete_node_endpoint(req: DeleteNodeRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.delete_node(req.project_id, req.path, db)
+        return {"status": "success", **res}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/move")
+def move_node_endpoint(req: MoveNodeRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.move_node(req.project_id, req.src_path, req.dest_folder, db)
+        return {"status": "success", **res}
+    except (FileNotFoundError, FileExistsError, NotADirectoryError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/fs/duplicate")
+def duplicate_file_endpoint(req: DuplicateFileRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.duplicate_file(req.project_id, req.path, db)
+        return {"status": "success", **res}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/workspace/reveal")
+def reveal_in_explorer_endpoint(req: RevealRequest, db: Session = Depends(get_db)):
+    try:
+        res = workspace_service.reveal_in_explorer(req.project_id, req.path, db)
+        return {"status": "success", **res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+

@@ -55,7 +55,7 @@ export const ActivityBar: React.FC = () => {
   };
 
   return (
-    <div className="flex w-12 flex-col justify-between items-center bg-[#05060a] border-r border-slate-900 select-none py-2 z-30 flex-shrink-0">
+    <div className="flex w-12 flex-col justify-between items-center bg-[var(--bg-activity,#05060a)] border-r border-[var(--border-color,#1e293b)] select-none py-2 z-30 flex-shrink-0 transition-colors duration-200">
       {/* Primary Shortcut Actions */}
       <div className="flex flex-col items-center w-full gap-0.5">
         <BarIcon 

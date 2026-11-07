@@ -53,6 +53,14 @@ export const TerminalTabItem: React.FC<TerminalTabItemProps> = ({ tab, isActive 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
+    // Apply active theme if present
+    const handleThemeChange = (e: any) => {
+      if (e.detail?.theme?.xtermTheme && xtermRef.current) {
+        xtermRef.current.options.theme = e.detail.theme.xtermTheme;
+      }
+    };
+    window.addEventListener('theme-changed', handleThemeChange);
+
     requestAnimationFrame(() => {
       try {
         fitAddon.fit();
@@ -126,6 +134,7 @@ export const TerminalTabItem: React.FC<TerminalTabItemProps> = ({ tab, isActive 
     // Cleanup: close socket and dispose terminal when component unmounts
     return () => {
       console.log(`[TERMINAL] Unmounting — closing socket for session ${tab.sessionId}`);
+      window.removeEventListener('theme-changed', handleThemeChange);
       resizeObserver.disconnect();
       terminalService.unregisterDirectSocket(tab.sessionId);
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {

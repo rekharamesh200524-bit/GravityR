@@ -1,11 +1,13 @@
 import React from 'react';
-import { GitBranch, Wifi, Cpu, Layers } from 'lucide-react';
+import { GitBranch, Wifi, Cpu, Folder, CheckCircle2, Loader2, Info } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore';
 import { useSettingsStore } from '../../stores/useSettingsStore';
+import { useGitStore } from '../../stores/useGitStore';
 
 export const StatusBar: React.FC = () => {
-  const { currentProject, selectedFilePath, selectedFileEncoding, isScanning, cursorLine, cursorCol } = useWorkspaceStore();
+  const { currentProject, selectedFilePath, selectedFileEncoding, workspaceStatus, cursorLine, cursorCol } = useWorkspaceStore();
   const { model, provider } = useSettingsStore();
+  const { branch, stagedFiles, unstagedFiles } = useGitStore();
 
   const getLanguageLabel = (path: string | null) => {
     if (!path) return '';
@@ -23,27 +25,67 @@ export const StatusBar: React.FC = () => {
     return 'Plain Text';
   };
 
+  const stagedCount = stagedFiles?.length || 0;
+  const unstagedCount = unstagedFiles?.length || 0;
+
   return (
-    <footer className="flex h-6 items-center justify-between border-t border-slate-900 bg-[#04050a] px-3 select-none text-[10px] text-slate-500 font-mono z-40">
+    <footer className="flex h-6 items-center justify-between border-t border-[var(--border-color,#0f172a)] bg-[var(--bg-statusbar,#04050a)] px-3 select-none text-[10px] text-[var(--fg-muted,#64748b)] font-mono z-40">
       {/* Left items */}
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1 bg-violet-650/10 border border-violet-500/10 text-violet-400 px-1.5 py-0.5 rounded-sm text-[9px] font-sans font-semibold uppercase tracking-wider">
-          gravityx
-        </div>
-        
-        {currentProject && (
-          <div className="flex items-center gap-1 hover:text-slate-350 cursor-pointer">
-            <GitBranch className="h-3 w-3 text-slate-500" />
-            <span>local-fs</span>
+        {/* Workspace Project Name & Path */}
+        {currentProject ? (
+          <div className="flex items-center gap-1.5 text-[var(--fg-primary,#f8fafc)] font-semibold" title={currentProject.path}>
+            <Folder className="h-3 w-3 text-violet-400" />
+            <span>{currentProject.name}</span>
+            <span className="text-[9px] text-[var(--fg-muted,#64748b)] font-normal hidden lg:inline max-w-[200px] truncate">({currentProject.path})</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1 text-[var(--fg-muted,#64748b)]">
+            <Folder className="h-3 w-3" />
+            <span>No Workspace</span>
           </div>
         )}
 
-        <div className="flex items-center gap-1">
-          <span className="flex h-1.5 w-1.5 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-          </span>
-          <span className="text-[9px] font-sans uppercase font-bold text-emerald-500">Connected</span>
+        {/* Current Branch & Git Status */}
+        {currentProject && (
+          <div className="flex items-center gap-2 border-l border-[var(--border-color,#1e293b)] pl-2">
+            <div className="flex items-center gap-1 text-[var(--fg-secondary,#cbd5e1)] hover:text-[var(--accent-color,#8b5cf6)] cursor-pointer" title={`Active Branch: ${branch || 'main'}`}>
+              <GitBranch className="h-3 w-3 text-violet-400" />
+              <span>{branch || 'main'}</span>
+            </div>
+            <div className="flex items-center gap-1 text-[9px] font-mono">
+              <span className="text-emerald-400 font-semibold" title="Staged files">+{stagedCount}</span>
+              <span className="text-amber-400 font-semibold" title="Unstaged files">-{unstagedCount}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Workspace Lifecycle Status */}
+        <div className="flex items-center gap-1 border-l border-[var(--border-color,#1e293b)] pl-2 font-sans font-semibold">
+          {workspaceStatus === 'loading' && (
+            <div className="flex items-center gap-1 text-sky-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="uppercase text-[9px]">Loading...</span>
+            </div>
+          )}
+          {workspaceStatus === 'indexing' && (
+            <div className="flex items-center gap-1 text-violet-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="uppercase text-[9px]">Indexing...</span>
+            </div>
+          )}
+          {workspaceStatus === 'ready' && (
+            <div className="flex items-center gap-1 text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" />
+              <span className="uppercase text-[9px]">Ready</span>
+            </div>
+          )}
+          {workspaceStatus === 'idle' && (
+            <div className="flex items-center gap-1 text-slate-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+              <span className="uppercase text-[9px]">Idle</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -59,16 +101,9 @@ export const StatusBar: React.FC = () => {
         
         {/* Model stats */}
         <div className="flex items-center gap-1.5">
-          <Cpu className="h-3 w-3 text-slate-500" />
+          <Cpu className="h-3 w-3 text-[var(--fg-muted,#64748b)]" />
           <span className="capitalize">{provider}: {model.split('-').slice(0, 3).join('-')}</span>
         </div>
-        
-        {isScanning && (
-          <div className="flex items-center gap-1 text-violet-400">
-            <span className="animate-spin h-2 w-2 border border-violet-400 border-t-transparent rounded-full" />
-            <span>Indexing...</span>
-          </div>
-        )}
       </div>
     </footer>
   );

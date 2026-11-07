@@ -25,7 +25,7 @@ declare global {
 
 export const MenuBar: React.FC = () => {
   const { currentProject, closeWorkspace, openTab, addNode, openWorkspace } = useWorkspaceStore();
-  const { toggleTerminal, toggleInspector, toggleSidebar } = useLayoutStore();
+  const { toggleTerminal, toggleInspector, toggleSidebar, setActiveSidebarView, setLeftPanelCollapsed } = useLayoutStore();
   const { sendMessage } = useChatStore();
   const { model } = useSettingsStore();
 
@@ -111,6 +111,7 @@ export const MenuBar: React.FC = () => {
         { label: 'Toggle Sidebar Panel', onClick: () => toggleSidebar() },
         { label: 'Toggle Terminal Output', onClick: () => toggleTerminal() },
         { label: 'Toggle AI Co-Pilot Panel', onClick: () => toggleInspector() },
+        { label: 'Settings & Appearance...', onClick: () => { setActiveSidebarView('settings'); setLeftPanelCollapsed(false); } },
       ]
     },
     {
@@ -163,7 +164,7 @@ export const MenuBar: React.FC = () => {
   ];
 
   return (
-    <div className="flex h-8 items-center bg-[#05070d] border-b border-slate-900 px-3 select-none text-[11px] text-slate-350 z-50 relative gap-1">
+    <div className="flex h-8 items-center bg-[var(--bg-menubar,#05070d)] border-b border-[var(--border-color,#1e293b)] px-3 select-none text-[11px] text-[var(--fg-secondary,#cbd5e1)] z-50 relative gap-1 transition-colors duration-200">
       {/* Brand logo mini */}
       <div className="flex items-center gap-1.5 mr-3 font-semibold text-slate-200">
         <CodeXml className="h-4 w-4 text-violet-500 animate-pulse" />

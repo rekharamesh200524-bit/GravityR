@@ -62,19 +62,17 @@ class TerminalSession:
         try:
             if sys.platform == "win32":
                 import winpty
-                self.process = winpty.PTY(cols, rows)
+                argv = [appname]
+                if cmdline:
+                    argv.extend(cmdline.split())
                 
-                # Spawn process with explicit command line for winpty
-                success = self.process.spawn(
-                    appname=appname,
-                    cmdline=target_cmdline,
-                    cwd=self.working_directory
+                self.process = winpty.PtyProcess.spawn(
+                    argv,
+                    cwd=self.working_directory,
+                    dimensions=(rows, cols)
                 )
-                if not success:
-                    raise RuntimeError(f"Failed to spawn shell process: {appname}")
-                
                 self.pid = self.process.pid
-                log_lifecycle("STARTUP_STAGE_2_WINPTY_READY", self.session_id, f"Winpty PTY initialized. PID: {self.pid}")
+                log_lifecycle("STARTUP_STAGE_2_WINPTY_READY", self.session_id, f"Winpty PtyProcess initialized. PID: {self.pid}")
             else:
                 try:
                     import ptyprocess
@@ -144,11 +142,10 @@ class TerminalSession:
         try:
             while self.status == "running" and self.process and self._is_alive():
                 try:
-                    # Pass length=1024 as first positional argument so False is not passed as buffer length
-                    try:
-                        data = self.process.read(1024, blocking=False)
-                    except TypeError:
-                        data = self.process.read(blocking=False)
+                    if hasattr(self.process, "read"):
+                        data = await asyncio.to_thread(self.process.read, 1024)
+                    else:
+                        data = ""
 
                     if data:
                         log_lifecycle("PROCESS_READ_EXACT", self.session_id, f"process.read returned: length={len(data)}, repr={repr(data[:100])}")
@@ -161,6 +158,9 @@ class TerminalSession:
                                 await subscriber(data)
                             except Exception as sub_err:
                                 log_lifecycle("SUBSCRIBER_DISPATCH_ERROR", self.session_id, f"Subscriber error: {sub_err}")
+                except EOFError:
+                    log_lifecycle("READ_LOOP_EOF", self.session_id, "PTY process EOF reached.")
+                    break
                 except Exception as read_err:
                     log_lifecycle("PROCESS_READ_EXCEPTION", self.session_id, f"read_err: {type(read_err).__name__}: {read_err}")
                     if not self._is_alive() or self.status != "running":

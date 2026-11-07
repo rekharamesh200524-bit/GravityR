@@ -31,11 +31,28 @@
 
 :root {
   color-scheme: dark;
+  --bg-app: #03050a;
+  --bg-sidebar: #060810;
+  --bg-activity: #05060a;
+  --bg-statusbar: #04050a;
+  --bg-menubar: #05070d;
+  --bg-editor: #0b0d17;
+  --bg-card: #0f1322;
+  --bg-tabs: #080a12;
+  --fg-primary: #f8fafc;
+  --fg-secondary: #94a3b8;
+  --fg-muted: #64748b;
+  --border-color: #1e293b;
+  --accent-color: #8b5cf6;
+  --selection-bg: rgba(139, 92, 246, 0.25);
+  --tree-hover: rgba(139, 92, 246, 0.1);
+  --terminal-bg: #04060a;
+  --terminal-fg: #e2e8f0;
 }
 
 body {
-  background-color: #030712;
-  color: #f8fafc;
+  background-color: var(--bg-app, #030712);
+  color: var(--fg-primary, #f8fafc);
   font-family: var(--font-geist-sans), sans-serif;
   overflow: hidden;
 }

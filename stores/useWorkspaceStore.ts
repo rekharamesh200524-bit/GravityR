@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { FileNode } from '../types';
+import { useGitStore } from './useGitStore';
 
 export interface ProjectMetadata {
   id: string;
@@ -34,7 +35,9 @@ interface WorkspaceState {
   openTabs: string[];
   activeTab: string | null;
   editedFiles: Record<string, string>;
-  
+  scanTotalFiles: number;
+  workspaceStatus: 'idle' | 'loading' | 'indexing' | 'ready';
+  initWorkspace: () => Promise<void>;
   openWorkspace: (path: string) => Promise<void>;
   fetchRecents: () => Promise<void>;
   fetchTree: () => Promise<void>;
@@ -45,10 +48,20 @@ interface WorkspaceState {
   openTab: (filePath: string) => Promise<void>;
   closeTab: (filePath: string) => Promise<void>;
   setActiveTab: (filePath: string) => Promise<void>;
+  dirtyFiles: Set<string>;
+  isSaving: boolean;
+  lastSavedPath: string | null;
   updateFileContent: (filePath: string, content: string) => void;
+  saveFile: (filePath: string) => Promise<void>;
+  saveAllDirtyFiles: () => Promise<string[]>;
   addNode: (parentPath: string | null, name: string, isFolder: boolean) => void;
-  renameNode: (path: string, newName: string) => void;
-  deleteNode: (path: string) => void;
+  createFile: (parentPath: string | null, name: string) => Promise<string | null>;
+  createFolder: (parentPath: string | null, name: string) => Promise<boolean>;
+  renameNode: (path: string, newName: string) => Promise<boolean>;
+  deleteNode: (path: string) => Promise<boolean>;
+  moveNode: (srcPath: string, destFolder: string) => Promise<boolean>;
+  duplicateFile: (filePath: string) => Promise<string | null>;
+  revealInExplorer: (filePath: string) => Promise<void>;
   cursorLine: number;
   cursorCol: number;
   setCursorPos: (line: number, col: number) => void;
@@ -68,10 +81,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   selectedFileSize: 0,
   isScanning: false,
   scanProcessedFiles: 0,
+  scanTotalFiles: 0,
+  workspaceStatus: 'idle',
   errorMessage: null,
   openTabs: [],
   activeTab: null,
   editedFiles: {},
+  dirtyFiles: new Set<string>(),
+  isSaving: false,
+  lastSavedPath: null,
 
   clearError: () => set({ errorMessage: null }),
 
@@ -80,17 +98,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       clearInterval(scanPollInterval);
       scanPollInterval = null;
     }
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('gravityx_last_workspace_path');
+    }
     set({
       currentProject: null,
       fileTree: [],
       selectedFilePath: null,
       selectedFileContent: null,
       isScanning: false,
+      workspaceStatus: 'idle',
       scanProcessedFiles: 0,
+      scanTotalFiles: 0,
       errorMessage: null,
       openTabs: [],
       activeTab: null,
-      editedFiles: {}
+      editedFiles: {},
+      dirtyFiles: new Set<string>(),
+      isSaving: false,
+      lastSavedPath: null,
     });
   },
 
@@ -183,13 +209,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  initWorkspace: async () => {
+    if (typeof window === 'undefined') return;
+    const lastPath = localStorage.getItem('gravityx_last_workspace_path');
+    if (lastPath && !get().currentProject) {
+      await get().openWorkspace(lastPath);
+    }
+  },
+
   openWorkspace: async (path: string) => {
     if (scanPollInterval) {
       clearInterval(scanPollInterval);
       scanPollInterval = null;
     }
 
-    set({ isScanning: true, scanProcessedFiles: 0, errorMessage: null });
+    set({ isScanning: true, workspaceStatus: 'loading', scanProcessedFiles: 0, errorMessage: null });
 
     try {
       const res = await fetch(`${API_BASE}/workspace/open`, {
@@ -206,9 +240,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const data = await res.json();
       if (data.status === "success") {
         const project = data.project as ProjectMetadata;
-        set({ currentProject: project });
+        set({ currentProject: project, workspaceStatus: 'indexing' });
+
+        // Save last opened path for 1-click restore
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('gravityx_last_workspace_path', path);
+          // Dispatch CWD change event for Integrated Terminal
+          window.dispatchEvent(new CustomEvent('workspace-cwd-changed', { detail: { path } }));
+        }
+
+        // Trigger Git Repository Detection automatically
+        useGitStore.getState().fetchGitStatus().catch(() => {});
         
-        // Start polling scanner progress
+        // Start polling scanner progress — fetch tree on every poll so explorer populates in real-time
+        let lastTreeFetch = 0;
         scanPollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch(`${API_BASE}/workspace/scan-status?path=${encodeURIComponent(path)}`);
@@ -217,7 +262,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             
             if (statusData.status === "success" && statusData.scan) {
               const scan = statusData.scan;
-              set({ scanProcessedFiles: scan.processed_files });
+              set({
+                scanProcessedFiles: scan.processed_files || 0,
+                scanTotalFiles: scan.total_files || 0
+              });
+
+              // Refresh tree every 2 seconds during scanning so explorer populates progressively
+              const now = Date.now();
+              if (scan.processed_files > 0 && now - lastTreeFetch > 2000) {
+                lastTreeFetch = now;
+                const store = useWorkspaceStore.getState();
+                store.fetchTree().catch(() => {});
+              }
               
               if (scan.status === "completed") {
                 if (scanPollInterval) {
@@ -225,8 +281,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                   scanPollInterval = null;
                 }
                 
-                // Scan complete: Refresh details and load tree
-                set({ isScanning: false });
+                // Scan complete: mark scanning done & workspace ready
+                set({ isScanning: false, workspaceStatus: 'ready' });
                 
                 // Fetch updated project metadata
                 const infoRes = await fetch(`${API_BASE}/workspace/info?project_id=${project.id}`);
@@ -237,22 +293,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                   }
                 }
                 
-                // Fetch new tree structure
+                // Final tree + recents fetch + git refresh
                 const store = useWorkspaceStore.getState();
                 await store.fetchTree();
                 await store.fetchRecents();
+                useGitStore.getState().fetchGitStatus().catch(() => {});
               } else if (scan.status === "failed") {
                 if (scanPollInterval) {
                   clearInterval(scanPollInterval);
                   scanPollInterval = null;
                 }
-                set({ isScanning: false, errorMessage: scan.error || "Workspace scanning failed." });
+                set({ isScanning: false, workspaceStatus: 'ready', errorMessage: scan.error || "Workspace scanning failed." });
               }
             }
           } catch (pollErr) {
             console.error("Polling error:", pollErr);
           }
-        }, 1000);
+        }, 800);
 
         // Fetch initial tree and recents immediately
         const store = useWorkspaceStore.getState();
@@ -260,7 +317,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         await store.fetchRecents();
       }
     } catch (err: any) {
-      set({ isScanning: false, errorMessage: err.message });
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('gravityx_last_workspace_path');
+      }
+      const msg = (err.message === 'Failed to fetch' || err.message?.includes('fetch'))
+        ? 'Backend API server offline (http://localhost:8000). Starting backend...'
+        : err.message;
+      set({ isScanning: false, workspaceStatus: 'idle', errorMessage: msg, currentProject: null, fileTree: [] });
     }
   },
 
@@ -294,12 +357,76 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) => {
       const updated = { ...state.editedFiles, [filePath]: content };
       const selectedContent = state.selectedFilePath === filePath ? content : state.selectedFileContent;
+      const newDirty = new Set(state.dirtyFiles);
+      newDirty.add(filePath);
       return {
         editedFiles: updated,
         selectedFileContent: selectedContent,
-        selectedFileSize: selectedContent ? selectedContent.length : 0
+        selectedFileSize: selectedContent ? selectedContent.length : 0,
+        dirtyFiles: newDirty,
       };
     });
+  },
+
+  saveFile: async (filePath: string) => {
+    const state = get();
+    const { currentProject, editedFiles, isSaving } = state;
+    if (!currentProject || !filePath || isSaving) return;
+
+    // Only save if there is edited content; fall back to selectedFileContent
+    const content = editedFiles[filePath] ?? state.selectedFileContent;
+    if (content === null || content === undefined) return;
+
+    set({ isSaving: true });
+    try {
+      const res = await fetch(`${API_BASE}/workspace/file/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: currentProject.id,
+          path: filePath,
+          content,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Save failed');
+      }
+
+      // Clear dirty state for this file
+      set((state) => {
+        const newDirty = new Set(state.dirtyFiles);
+        newDirty.delete(filePath);
+        // Clear from editedFiles so re-open reads from disk
+        const { [filePath]: _removed, ...restEdited } = state.editedFiles;
+        return {
+          dirtyFiles: newDirty,
+          editedFiles: restEdited,
+          isSaving: false,
+          lastSavedPath: filePath,
+        };
+      });
+
+      // Refresh git status so Source Control updates immediately
+      useGitStore.getState().fetchGitStatus();
+
+      // Refresh file tree so explorer M decoration updates
+      await get().fetchTree();
+    } catch (err: any) {
+      set({ isSaving: false, errorMessage: err.message });
+    }
+  },
+
+  saveAllDirtyFiles: async () => {
+    const { dirtyFiles, saveFile } = get();
+    if (!dirtyFiles || dirtyFiles.size === 0) return [];
+    
+    const paths = Array.from(dirtyFiles);
+    for (const filePath of paths) {
+      await saveFile(filePath);
+    }
+    return paths;
   },
 
   addNode: (parentPath, name, isFolder) => {
@@ -341,87 +468,223 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ fileTree: updateTree(fileTree) });
   },
 
-  renameNode: (path, newName) => {
-    const { fileTree, openTabs, activeTab, editedFiles } = get();
-    const parts = path.split('/');
-    parts[parts.length - 1] = newName;
-    const newPath = parts.join('/');
+  createFile: async (parentPath, name) => {
+    const { currentProject, fetchTree } = get();
+    if (!currentProject) return null;
 
-    const updateTree = (nodes: FileNode[]): FileNode[] => {
-      return nodes.map(n => {
-        if (n.path === path) {
-          const updatePaths = (node: FileNode, oldPrefix: string, newPrefix: string): FileNode => {
-            const relativePath = node.path.substring(oldPrefix.length);
-            const updatedNodePath = newPrefix + relativePath;
-            return {
-              ...node,
-              path: updatedNodePath,
-              children: node.children ? node.children.map(c => updatePaths(c, oldPrefix, newPrefix)) : undefined
-            };
-          };
-          return updatePaths({ ...n, name: newName }, path, newPath);
-        }
-        if (n.children) {
-          return { ...n, children: updateTree(n.children) };
-        }
-        return n;
-      });
-    };
-
-    const newTabs = openTabs.map(t => t.startsWith(path) ? t.replace(path, newPath) : t);
-    const newActive = activeTab && activeTab.startsWith(path) ? activeTab.replace(path, newPath) : activeTab;
-
-    const newEditedFiles = { ...editedFiles };
-    for (const key in editedFiles) {
-      if (key.startsWith(path)) {
-        const newKey = key.replace(path, newPath);
-        newEditedFiles[newKey] = editedFiles[key];
-        delete newEditedFiles[key];
-      }
+    let targetRelPath = "";
+    if (!parentPath || parentPath === "/") {
+      targetRelPath = "/" + name;
+    } else {
+      targetRelPath = parentPath.replace(/\/$/, "") + "/" + name;
     }
 
-    set({ 
-      fileTree: updateTree(fileTree),
-      openTabs: newTabs,
-      activeTab: newActive,
-      editedFiles: newEditedFiles,
-      selectedFilePath: get().selectedFilePath === path ? newPath : get().selectedFilePath
-    });
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/create-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, path: targetRelPath })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to create file.");
+      }
+      const data = await res.json();
+      await fetchTree();
+      useGitStore.getState().fetchGitStatus();
+      return data.path || targetRelPath;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return null;
+    }
   },
 
-  deleteNode: (path) => {
-    const { fileTree, openTabs, activeTab, editedFiles } = get();
-    const updateTree = (nodes: FileNode[]): FileNode[] => {
-      return nodes
-        .filter(n => n.path !== path)
-        .map(n => {
-          if (n.children) {
-            return { ...n, children: updateTree(n.children) };
-          }
-          return n;
-        });
-    };
+  createFolder: async (parentPath, name) => {
+    const { currentProject, fetchTree } = get();
+    if (!currentProject) return false;
 
-    const newTabs = openTabs.filter(t => !t.startsWith(path));
-    let newActive = activeTab;
-    if (activeTab && activeTab.startsWith(path)) {
-      newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1] : null;
+    let targetRelPath = "";
+    if (!parentPath || parentPath === "/") {
+      targetRelPath = "/" + name;
+    } else {
+      targetRelPath = parentPath.replace(/\/$/, "") + "/" + name;
     }
 
-    const newEditedFiles = { ...editedFiles };
-    for (const key in editedFiles) {
-      if (key.startsWith(path)) {
-        delete newEditedFiles[key];
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/create-folder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, path: targetRelPath })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to create folder.");
       }
+      await fetchTree();
+      return true;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return false;
     }
+  },
 
-    set({ 
-      fileTree: updateTree(fileTree),
-      openTabs: newTabs,
-      activeTab: newActive,
-      editedFiles: newEditedFiles,
-      selectedFilePath: get().selectedFilePath === path ? null : get().selectedFilePath
-    });
+  renameNode: async (path, newName) => {
+    const { currentProject, fetchTree, openTabs, activeTab, editedFiles } = get();
+    if (!currentProject) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, old_path: path, new_name: newName })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to rename.");
+      }
+
+      const data = await res.json();
+      const newPath = data.new_path;
+
+      // Update client state for tabs and edited files
+      const newTabs = openTabs.map(t => t.startsWith(path) ? t.replace(path, newPath) : t);
+      const newActive = activeTab && activeTab.startsWith(path) ? activeTab.replace(path, newPath) : activeTab;
+      const newEditedFiles = { ...editedFiles };
+      for (const key in editedFiles) {
+        if (key.startsWith(path)) {
+          const newKey = key.replace(path, newPath);
+          newEditedFiles[newKey] = editedFiles[key];
+          delete newEditedFiles[key];
+        }
+      }
+
+      set({
+        openTabs: newTabs,
+        activeTab: newActive,
+        editedFiles: newEditedFiles,
+        selectedFilePath: get().selectedFilePath === path ? newPath : get().selectedFilePath
+      });
+
+      await fetchTree();
+      useGitStore.getState().fetchGitStatus();
+      return true;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return false;
+    }
+  },
+
+  deleteNode: async (path) => {
+    const { currentProject, fetchTree, openTabs, activeTab, editedFiles } = get();
+    if (!currentProject) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, path })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to delete.");
+      }
+
+      // Close open tabs matching deleted path
+      const newTabs = openTabs.filter(t => !t.startsWith(path));
+      let newActive = activeTab;
+      if (activeTab && activeTab.startsWith(path)) {
+        newActive = newTabs.length > 0 ? newTabs[newTabs.length - 1] : null;
+      }
+
+      const newEditedFiles = { ...editedFiles };
+      for (const key in editedFiles) {
+        if (key.startsWith(path)) {
+          delete newEditedFiles[key];
+        }
+      }
+
+      set({
+        openTabs: newTabs,
+        activeTab: newActive,
+        editedFiles: newEditedFiles,
+        selectedFilePath: get().selectedFilePath === path ? null : get().selectedFilePath
+      });
+
+      await fetchTree();
+      useGitStore.getState().fetchGitStatus();
+      return true;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return false;
+    }
+  },
+
+  moveNode: async (srcPath, destFolder) => {
+    const { currentProject, fetchTree } = get();
+    if (!currentProject) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, src_path: srcPath, dest_folder: destFolder })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to move node.");
+      }
+
+      await fetchTree();
+      useGitStore.getState().fetchGitStatus();
+      return true;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return false;
+    }
+  },
+
+  duplicateFile: async (filePath) => {
+    const { currentProject, fetchTree } = get();
+    if (!currentProject) return null;
+
+    try {
+      const res = await fetch(`${API_BASE}/workspace/fs/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, path: filePath })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to duplicate file.");
+      }
+
+      const data = await res.json();
+      await fetchTree();
+      useGitStore.getState().fetchGitStatus();
+      return data.new_path || null;
+    } catch (err: any) {
+      set({ errorMessage: err.message });
+      return null;
+    }
+  },
+
+  revealInExplorer: async (filePath) => {
+    const { currentProject } = get();
+    if (!currentProject) return;
+
+    try {
+      await fetch(`${API_BASE}/workspace/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: currentProject.id, path: filePath })
+      });
+    } catch (err: any) {
+      console.error("Reveal error:", err);
+    }
   },
 
   cursorLine: 1,

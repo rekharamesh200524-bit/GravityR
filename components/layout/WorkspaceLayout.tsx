@@ -6,6 +6,7 @@ import { useLayoutStore, SidebarView } from '../../stores/useLayoutStore';
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore';
 import { useMemoryStore } from '../../stores/useMemoryStore';
 import { FileExplorer } from '../../features/explorer/FileExplorer';
+import { SourceControlPanel } from '../../features/sidebar/SourceControlPanel';
 import { DiffPanel as EditorPanel } from '../../features/diff/DiffPanel';
 import { AiExecutionPanel } from '../../features/inspector/AiExecutionPanel';
 import { BottomPanel } from '../../features/terminal/BottomPanel';
@@ -13,6 +14,8 @@ import { MenuBar } from './MenuBar';
 import { Toolbar } from './Toolbar';
 import { ActivityBar } from './ActivityBar';
 import { StatusBar } from './StatusBar';
+import { useSettingsStore } from '../../stores/useSettingsStore';
+import { SettingsPanel } from '../settings/SettingsPanel';
 import { Database, Plus, Trash2, ShieldCheck, Search, GitBranch, Sparkles, Bookmark, Blocks, Settings } from 'lucide-react';
 import { Button } from '../ui/button';
 
@@ -37,13 +40,20 @@ export const WorkspaceLayout: React.FC = () => {
     setTerminalCollapsed
   } = useLayoutStore();
 
-  const { currentProject, openWorkspace, triggerRescan } = useWorkspaceStore();
+  const { currentProject, openWorkspace, triggerRescan, initWorkspace } = useWorkspaceStore();
+  const { initSettings } = useSettingsStore();
   const { memories, addMemory, removeMemory } = useMemoryStore();
   const [newMemoryText, setNewMemoryText] = useState('');
   const [isAddingFact, setIsAddingFact] = useState(false);
   
   const [savedHorizontalLayout, setSavedHorizontalLayout] = useState<any>(undefined);
   const [savedVerticalLayout, setSavedVerticalLayout] = useState<any>(undefined);
+
+  // Auto-restore last workspace & settings on launch
+  useEffect(() => {
+    initSettings();
+    initWorkspace();
+  }, [initSettings, initWorkspace]);
 
   // 1. Dynamic Window Title Synchronization
   useEffect(() => {
@@ -201,20 +211,7 @@ export const WorkspaceLayout: React.FC = () => {
           </div>
         );
       case 'git':
-        return (
-          <div className="flex flex-col h-full bg-[#080a14]/60 p-4 select-none space-y-3">
-            <div className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Source Control</div>
-            <div className="text-[10px] text-slate-550 uppercase font-semibold">Changes (Uncommitted)</div>
-            <div className="space-y-1.5 font-mono text-[10px]">
-              <div className="flex items-center justify-between p-2 rounded bg-red-955/10 border border-red-500/10 text-red-400 cursor-pointer hover:bg-red-955/25">
-                <span>M /app/page.tsx</span>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded bg-amber-955/10 border border-amber-500/10 text-amber-400 cursor-pointer hover:bg-amber-955/25">
-                <span>U /components/Button.tsx</span>
-              </div>
-            </div>
-          </div>
-        );
+        return <SourceControlPanel />;
       case 'tasks':
         return (
           <div className="flex flex-col h-full bg-[#080a14]/60 p-4 select-none">
@@ -310,35 +307,15 @@ export const WorkspaceLayout: React.FC = () => {
           </div>
         );
       case 'settings':
-        return (
-          <div className="flex flex-col h-full bg-[#080a14]/60 p-4 select-none space-y-4">
-            <div className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Local Settings</div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-550 uppercase tracking-wide mb-1">Editor Font Size</label>
-                <select className="w-full bg-slate-900 border border-slate-800 text-xs rounded px-2 py-1 focus:outline-none text-slate-300">
-                  <option>12px (Default)</option>
-                  <option>14px</option>
-                  <option>16px</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-550 uppercase tracking-wide mb-1">Render Minimap</label>
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" defaultChecked className="accent-violet-500" />
-                  <span className="text-xs text-slate-355">Show minimap layout bar</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
+        return <SettingsPanel />;
       default:
         return <FileExplorer />;
     }
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#03050a] text-slate-100 antialiased font-sans">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-app,#03050a)] text-[var(--fg-primary,#f8fafc)] antialiased font-sans transition-colors duration-200">
+      {/* 1. Top IDE Menu Bar */}
       {/* 1. Top IDE Menu Bar */}
       <MenuBar />
 

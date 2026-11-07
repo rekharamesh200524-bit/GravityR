@@ -42,7 +42,7 @@ export const Sidebar: React.FC = () => {
     <motion.aside
       animate={{ width: sidebarCollapsed ? 60 : 256 }}
       transition={{ duration: 0.25, ease: 'easeInOut' }}
-      className="flex flex-col h-full bg-[#060810]/95 border-r border-slate-900 overflow-hidden select-none"
+      className="flex flex-col h-full bg-[var(--bg-sidebar,#060810)] border-r border-[var(--border-color,#1e293b)] overflow-hidden select-none transition-colors duration-200"
     >
       {/* Sidebar Header */}
       <div className="flex h-14 items-center justify-between px-4 border-b border-slate-900/60">
