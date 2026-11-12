@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { FileNode } from '../types';
 import { useGitStore } from './useGitStore';
+import { pickNativeFolder } from '../utils/nativePicker';
 
 export interface ProjectMetadata {
   id: string;
@@ -42,6 +43,8 @@ interface WorkspaceState {
   workspaceStatus: 'idle' | 'loading' | 'indexing' | 'ready';
   isFolderModalOpen: boolean;
   setFolderModalOpen: (open: boolean) => void;
+  isPickingFolder: boolean;
+  openFolderDialog: () => Promise<void>;
   initWorkspace: () => Promise<void>;
   openWorkspace: (path: string) => Promise<void>;
   fetchRecents: () => Promise<void>;
@@ -99,8 +102,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   isSaving: false,
   lastSavedPath: null,
   isFolderModalOpen: false,
+  isPickingFolder: false,
 
   setFolderModalOpen: (open: boolean) => set({ isFolderModalOpen: open }),
+
+  openFolderDialog: async () => {
+    if (get().isPickingFolder) return;
+    set({ isPickingFolder: true });
+    try {
+      const selectedPath = await pickNativeFolder();
+      if (selectedPath) {
+        await get().openWorkspace(selectedPath);
+      }
+    } catch (err) {
+      console.warn('[WORKSPACE] Native folder picker failed, opening modal fallback:', err);
+      set({ isFolderModalOpen: true });
+    } finally {
+      set({ isPickingFolder: false });
+    }
+  },
 
   clearError: () => set({ errorMessage: null }),
 

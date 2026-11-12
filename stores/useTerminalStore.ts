@@ -17,6 +17,7 @@ interface TerminalStoreState {
   removeTab: (id: string) => void;
   setActiveTabId: (id: string) => void;
   renameTab: (id: string, newName: string) => void;
+  updateTabSession: (id: string, sessionId: string, cwd?: string) => void;
   setTabs: (tabs: TerminalTab[]) => void;
 }
 
@@ -58,6 +59,13 @@ export const useTerminalStore = create<TerminalStoreState>((set) => ({
   renameTab: (id, newName) =>
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, name: newName } : t)),
+    })),
+
+  updateTabSession: (id, sessionId, cwd) =>
+    set((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.id === id ? { ...t, sessionId, ...(cwd !== undefined ? { cwd } : {}) } : t
+      ),
     })),
 
   setTabs: (tabs) => set({ tabs }),

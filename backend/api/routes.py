@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import subprocess
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -83,20 +84,26 @@ async def pick_folder_dialog():
     Returns the absolute path of the selected folder.
     """
     def _run_picker():
+        # Run tkinter in a fresh subprocess so Tcl/Tk always runs on a main STA thread
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            root.lift()
-            root.focus_force()
-            selected_path = filedialog.askdirectory(title="Select Project Workspace Folder")
-            root.destroy()
-
-            if selected_path:
-                return os.path.abspath(selected_path)
+            tk_script = (
+                "import os, tkinter as tk; from tkinter import filedialog; "
+                "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True); r.update(); "
+                "p = filedialog.askdirectory(parent=r, title='Select Project Workspace Folder'); "
+                "r.destroy(); "
+                "print(os.path.abspath(p) if p else '')"
+            )
+            res = subprocess.run(
+                [sys.executable, "-c", tk_script],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            selected_path = res.stdout.strip()
+            if res.returncode == 0:
+                return selected_path if selected_path else None
+            if res.stderr:
+                print(f"[PICK_FOLDER] Tkinter subprocess stderr: {res.stderr.strip()}", flush=True)
         except Exception as tk_err:
             print(f"[PICK_FOLDER] Tkinter dialog error, falling back to PowerShell: {tk_err}", flush=True)
 
@@ -155,17 +162,6 @@ def open_workspace(req: OpenWorkspaceRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to open workspace: {str(e)}")
-
-
-@router.get("/workspace/{workspace_id}")
-def get_workspace_session(workspace_id: str):
-    session = workspace_manager.get_session(workspace_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"Workspace session not found: {workspace_id}")
-    return {
-        "status": "success",
-        "workspace": session.to_dict()
-    }
 
 
 @router.post("/workspace/close")
@@ -339,5 +335,16 @@ def reveal_in_explorer_endpoint(req: RevealRequest, db: Session = Depends(get_db
         return {"status": "success", **res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/workspace/{workspace_id}")
+def get_workspace_session(workspace_id: str):
+    session = workspace_manager.get_session(workspace_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Workspace session not found: {workspace_id}")
+    return {
+        "status": "success",
+        "workspace": session.to_dict()
+    }
 
 

@@ -11,8 +11,6 @@ import { Dialog } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { CodeXml, ShieldAlert, Cpu } from 'lucide-react';
 
-import { pickNativeFolder } from '../../utils/nativePicker';
-
 declare global {
   interface Window {
     electronAPI?: {
@@ -24,7 +22,7 @@ declare global {
 }
 
 export const MenuBar: React.FC = () => {
-  const { currentProject, closeWorkspace, openTab, addNode, openWorkspace } = useWorkspaceStore();
+  const { currentProject, closeWorkspace, openTab, addNode, openWorkspace, openFolderDialog } = useWorkspaceStore();
   const { toggleTerminal, toggleInspector, toggleSidebar, setActiveSidebarView, setLeftPanelCollapsed } = useLayoutStore();
   const { sendMessage } = useChatStore();
   const { model } = useSettingsStore();
@@ -32,6 +30,18 @@ export const MenuBar: React.FC = () => {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+
+  // Global Ctrl+O shortcut to open native OS File Explorer immediately
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        openFolderDialog();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [openFolderDialog]);
 
   // Close menus on Esc or click outside (Radix handles these automatically, but we sync our pointer-enter tracking states)
   useEffect(() => {
@@ -51,11 +61,9 @@ export const MenuBar: React.FC = () => {
     }, 200);
   };
 
-  const { setFolderModalOpen } = useWorkspaceStore();
-
   const handleOpenFolder = () => {
     console.log('[WORKSPACE DEBUG] Open Folder clicked');
-    setFolderModalOpen(true);
+    openFolderDialog();
   };
 
   const handleNewFile = () => {

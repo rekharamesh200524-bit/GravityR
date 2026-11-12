@@ -26,14 +26,16 @@ export class TerminalService {
   private legacySubscribers: Set<(data: string) => void> = new Set();
 
   private get apiBase() {
-    if (typeof window === 'undefined') return 'http://localhost:8000/api';
-    const host = window.location.hostname || 'localhost';
+    if (typeof window === 'undefined') return 'http://127.0.0.1:8000/api';
+    const rawHost = window.location.hostname || '127.0.0.1';
+    const host = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
     return `http://${host}:8000/api`;
   }
 
   private get wsBase() {
-    if (typeof window === 'undefined') return 'ws://localhost:8000';
-    const host = window.location.hostname || 'localhost';
+    if (typeof window === 'undefined') return 'ws://127.0.0.1:8000';
+    const rawHost = window.location.hostname || '127.0.0.1';
+    const host = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
     return `ws://${host}:8000`;
   }
 
@@ -184,15 +186,22 @@ export class TerminalService {
     return handle;
   }
 
+  private getActiveSessionId(): string | null {
+    const state = useTerminalStore.getState();
+    if (!state.activeTabId) return null;
+    const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+    return activeTab?.sessionId || state.activeTabId;
+  }
+
   /**
    * Sends input to the active terminal session (multi-tab routing).
    */
   public handleInput(data: string) {
-    const activeTabId = useTerminalStore.getState().activeTabId;
+    const sessionId = this.getActiveSessionId();
 
     // Try direct socket first
-    if (activeTabId) {
-      const socket = this.directSockets.get(activeTabId);
+    if (sessionId) {
+      const socket = this.directSockets.get(sessionId);
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(data);
         return;
@@ -200,8 +209,8 @@ export class TerminalService {
     }
 
     // Fallback to legacy handles
-    if (activeTabId && this.activeConnections.has(activeTabId)) {
-      this.activeConnections.get(activeTabId)?.sendInput(data);
+    if (sessionId && this.activeConnections.has(sessionId)) {
+      this.activeConnections.get(sessionId)?.sendInput(data);
     }
   }
 
@@ -209,16 +218,16 @@ export class TerminalService {
    * Resizes the active terminal session.
    */
   public resize(cols: number, rows: number) {
-    const activeTabId = useTerminalStore.getState().activeTabId;
-    if (activeTabId) {
-      const socket = this.directSockets.get(activeTabId);
+    const sessionId = this.getActiveSessionId();
+    if (sessionId) {
+      const socket = this.directSockets.get(sessionId);
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', cols, rows }));
         return;
       }
     }
-    if (activeTabId && this.activeConnections.has(activeTabId)) {
-      this.activeConnections.get(activeTabId)?.resize(cols, rows);
+    if (sessionId && this.activeConnections.has(sessionId)) {
+      this.activeConnections.get(sessionId)?.resize(cols, rows);
     }
   }
 

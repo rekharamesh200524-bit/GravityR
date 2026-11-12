@@ -99,5 +99,9 @@ class TerminalSessionManager:
         log_lifecycle("MANAGER_GET_NOT_FOUND", session_id, "Session ID not found in manager dictionary")
         return None
 
+    def close_all(self):
+        for sid in list(self.sessions.keys()):
+            self.close_session(sid)
+
 # Global instance of TerminalSessionManager
 terminal_manager = TerminalSessionManager()

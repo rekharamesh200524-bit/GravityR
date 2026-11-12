@@ -12,7 +12,6 @@ import { useLayoutStore } from '../../stores/useLayoutStore';
 import { useGitStore } from '../../stores/useGitStore';
 import { FileNode } from '../../types';
 import { Button } from '../../components/ui/button';
-import { pickNativeFolder } from '../../utils/nativePicker';
 
 // Reserved Windows filenames that cannot be used
 const RESERVED_WIN_NAMES = new Set([
@@ -391,6 +390,7 @@ export const FileExplorer: React.FC = () => {
   const { 
     currentProject, fileTree = [], isScanning, scanProcessedFiles, scanTotalFiles,
     triggerRescan, errorMessage, clearError, openTab, openWorkspace,
+    isPickingFolder, openFolderDialog,
     createFile, createFolder, renameNode, deleteNode, moveNode, duplicateFile, revealInExplorer, fetchTree
   } = useWorkspaceStore();
 
@@ -733,13 +733,14 @@ export const FileExplorer: React.FC = () => {
             <Button
               variant="primary"
               size="sm"
+              disabled={isPickingFolder}
               onClick={() => {
                 console.log('[WORKSPACE DEBUG] Open Folder clicked');
-                useWorkspaceStore.getState().setFolderModalOpen(true);
+                openFolderDialog();
               }}
               className="mt-1 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 cursor-pointer"
             >
-              <span>Open Folder...</span>
+              <span>{isPickingFolder ? 'Opening Explorer...' : 'Open Folder...'}</span>
             </Button>
           </div>
         )}

@@ -61,9 +61,16 @@ export const BottomPanel: React.FC = () => {
   useEffect(() => {
     const handleCwdChange = (e: any) => {
       const newPath = e.detail?.path;
-      if (newPath) {
-        terminalService.handleInput(`cd "${newPath}"\r`);
+      if (!newPath) return;
+      const state = useTerminalStore.getState();
+      const activeTabObj = state.tabs.find((t) => t.id === state.activeTabId);
+      if (activeTabObj && activeTabObj.cwd && activeTabObj.cwd.toLowerCase() === newPath.toLowerCase()) {
+        return; // Already in this directory
       }
+      if (activeTabObj) {
+        state.updateTabSession(activeTabObj.id, activeTabObj.sessionId, newPath);
+      }
+      terminalService.handleInput(`cd "${newPath}"\r`);
     };
     window.addEventListener('workspace-cwd-changed', handleCwdChange);
     return () => window.removeEventListener('workspace-cwd-changed', handleCwdChange);
@@ -117,9 +124,9 @@ export const BottomPanel: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#04060a]/90 border-t border-slate-900 overflow-hidden select-none">
+    <div className="flex flex-col h-full bg-[#04060a]/90 border-t border-slate-900 overflow-hidden">
       {/* Primary Tab Switcher Headers */}
-      <div className="flex h-9 items-center justify-between px-3 border-b border-slate-900 bg-[#070911]">
+      <div className="flex h-9 items-center justify-between px-3 border-b border-slate-900 bg-[#070911] select-none">
         <div className="flex items-center gap-1 scrollbar-none overflow-x-auto">
           <button
             onClick={() => setActiveTab('terminal')}

@@ -76,11 +76,8 @@ export const OpenWorkspaceModal: React.FC = () => {
         handleOpen(absolutePath);
       } else if (first.webkitRelativePath) {
         const rootFolder = first.webkitRelativePath.split('/')[0];
-        const userEntered = prompt(`Selected folder '${rootFolder}'. Please confirm full path on disk:`, `D:\\Projects\\${rootFolder}`);
-        if (userEntered) {
-          setFolderPath(userEntered);
-          handleOpen(userEntered);
-        }
+        setFolderPath(rootFolder);
+        setErrorMsg(`Browser sandbox hid full disk path for '${rootFolder}'. Please enter the full path above or click "Launch Browser OS Folder Picker".`);
       }
     }
   };

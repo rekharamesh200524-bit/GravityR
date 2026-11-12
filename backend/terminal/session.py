@@ -147,7 +147,10 @@ class TerminalSession:
             while self.status == "running" and self.process and self._is_alive():
                 try:
                     if hasattr(self.process, "read"):
-                        data = await asyncio.to_thread(self.process.read, 1024, blocking=False)
+                        if sys.platform == "win32":
+                            data = await asyncio.to_thread(self.process.read, 1024)
+                        else:
+                            data = await asyncio.to_thread(self.process.read, 1024, blocking=False)
                     else:
                         data = ""
 
@@ -225,9 +228,12 @@ class TerminalSession:
 
     def resize(self, cols: int, rows: int):
         log_lifecycle("SESSION_RESIZE", self.session_id, f"Resizing to cols={cols}, rows={rows}")
-        if self.process:
+        if self.process and cols > 0 and rows > 0:
             try:
-                self.process.set_size(cols, rows)
+                if hasattr(self.process, "setwinsize"):
+                    self.process.setwinsize(rows, cols)
+                elif hasattr(self.process, "set_size"):
+                    self.process.set_size(cols, rows)
             except Exception as e:
                 log_lifecycle("SESSION_RESIZE_ERROR", self.session_id, f"Failed to resize terminal: {e}")
 

@@ -81,7 +81,18 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 
             if not is_json:
                 safe = True
-                for char in data:
+                i = 0
+                while i < len(data):
+                    char = data[i]
+                    # Skip ANSI escape sequences (arrows, home, end, etc.) when tracking line_buffer
+                    if char == '\x1b':
+                        i += 1
+                        if i < len(data) and data[i] in ('[', 'O'):
+                            i += 1
+                            while i < len(data) and not ('@' <= data[i] <= '~'):
+                                i += 1
+                            i += 1
+                        continue
                     if char in ('\r', '\n'):
                         if not is_command_safe(line_buffer):
                             safe = False
@@ -93,6 +104,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                             line_buffer = line_buffer[:-1]
                     elif len(char) == 1 and 32 <= ord(char) < 127:
                         line_buffer += char
+                    i += 1
 
                 if safe:
                     log_lifecycle("PIPELINE_9_SESSION_WRITE", session_id, f"Routing input frame to session.write: {repr(data)}")

@@ -1,18 +1,9 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 
-const isAbsolutePath = (path: string): boolean => {
-  if (!path || typeof path !== 'string') return false;
-  const trimmed = path.trim();
-  // Windows drive path like C:\ or D:/ or network UNC path \\server
-  if (/^[a-zA-Z]:[/\\]/.test(trimmed) || /^\\\\[^\\]+\\[^\\]+/.test(trimmed)) return true;
-  // Unix absolute path starting with /
-  if (trimmed.startsWith('/')) return true;
-  return false;
-};
-
 /**
  * Triggers the native operating system File Explorer directory selection dialog.
- * Opens native OS File Explorer in Electron, Browser (File System Access / webkitdirectory), or Host Backend.
+ * Opens native OS File Explorer in Electron or Browser (via Next.js / Host Backend).
+ * Returns the selected absolute folder path, or null if cancelled.
  */
 export const pickNativeFolder = async (): Promise<string | null> => {
   // 1. Desktop Shell (Electron) - Native OS File Explorer
@@ -25,44 +16,41 @@ export const pickNativeFolder = async (): Promise<string | null> => {
     }
   }
 
-  // 2. Web Browser Native OS File Explorer via showDirectoryPicker (Chrome / Edge / Brave)
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-    try {
-      const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
-      if (handle) {
-        if ((handle as any).path && isAbsolutePath((handle as any).path)) {
-          return (handle as any).path;
-        }
-        const folderName = handle.name || '';
-        if (folderName) {
-          const userPath = window.prompt(
-            `Selected folder '${folderName}'.\n\nPlease confirm or enter the full disk path to this directory:\n(e.g., D:\\Projects\\${folderName} or D:\\${folderName})`,
-            `D:\\${folderName}`
-          );
-          if (userPath && isAbsolutePath(userPath.trim())) {
-            return userPath.trim();
-          }
-        }
+  // 2. Same-Origin Next.js Server Native OS File Explorer (Works in Firefox, Chrome, Edge, Safari)
+  try {
+    const res = await fetch('/api/pick-folder', {
+      method: 'POST',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && data.path) {
+        return data.path;
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        return null; // User explicitly clicked Cancel in OS dialog
+      if (data.status === 'cancelled') {
+        return null;
       }
-      console.warn('showDirectoryPicker error, falling back:', err);
     }
+  } catch (e) {
+    console.warn('Next.js native picker unavailable, trying backend picker:', e);
   }
 
-  // 3. Direct Prompt Fallback: Type or paste full folder path on disk
-  if (typeof window !== 'undefined') {
-    const manualPath = window.prompt(
-      "Open Project Workspace Folder\n\nPlease enter or paste the full absolute path to your project folder on disk:\n(e.g., D:\\Projects\\MyReactApp or D:\\GravityR)",
-      ""
-    );
-    if (manualPath && isAbsolutePath(manualPath.trim())) {
-      return manualPath.trim();
+  // 3. Host Backend Native OS File Explorer fallback
+  try {
+    const res = await fetch(`${API_BASE}/workspace/pick-folder`, {
+      method: 'POST',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && data.path) {
+        return data.path;
+      }
+      if (data.status === 'cancelled') {
+        return null;
+      }
     }
+  } catch (e) {
+    console.warn('Backend native picker unavailable:', e);
   }
 
-  return null;
+  throw new Error('Native OS File Explorer picker is unavailable');
 };
-

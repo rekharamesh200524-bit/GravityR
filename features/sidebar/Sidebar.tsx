@@ -10,8 +10,6 @@ import { useChatStore } from '../../stores/useChatStore';
 import { Dialog } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 
-import { pickNativeFolder } from '../../utils/nativePicker';
-
 export const Sidebar: React.FC = () => {
   const { sidebarCollapsed, toggleSidebar } = useLayoutStore();
   const { recentProjects, currentProject, openWorkspace, fetchRecents } = useWorkspaceStore();
@@ -25,10 +23,7 @@ export const Sidebar: React.FC = () => {
   }, [fetchRecents]);
 
   const handleOpenWorkspace = async () => {
-    const path = await pickNativeFolder();
-    if (path) {
-      await openWorkspace(path);
-    }
+    await useWorkspaceStore.getState().openFolderDialog();
   };
 
   const handleManualOpenWorkspace = async () => {

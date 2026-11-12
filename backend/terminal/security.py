@@ -1,10 +1,10 @@
 import re
 
 BLOCKED_PATTERNS = [
-    r"\bshutdown\b",
-    r"\bformat\b",
-    r"\bdel\s+/s\b",
-    r"\brm\s+-rf\b",
+    r"\bshutdown\s+/[sr]\b",
+    r"\bformat\s+[a-z]:",
+    r"\bdel\s+/s\s+/q\s+[a-z]:\\",
+    r"\brm\s+-rf\s+/\s*$",
     r"\bdiskpart\b"
 ]
 
