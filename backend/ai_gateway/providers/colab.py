@@ -47,7 +47,19 @@ class GoogleColabProvider(IInferenceProvider):
         gateway_logger.info("Initializing GoogleColabProvider", self._provider_name)
         return True
 
+    def _sync_endpoint(self) -> None:
+        latest = gateway_config.COLAB_ENDPOINT.rstrip("/")
+        if latest != self._endpoint:
+            self._endpoint = latest
+            self._connection = ColabConnectionManager(
+                endpoint=self._endpoint,
+                timeout=_COLAB_TIMEOUT,
+                max_retries=gateway_config.MAX_RETRIES,
+                health_interval=30,
+            )
+
     def connect(self) -> bool:
+        self._sync_endpoint()
         return self._connection.connect()
 
     def disconnect(self) -> bool:
@@ -63,6 +75,7 @@ class GoogleColabProvider(IInferenceProvider):
     ) -> GatewayResponse:
         start = time.time()
         options = options or {}
+        self._sync_endpoint()
 
         gateway_logger.info(
             f"generate() → model={model_id}, prompt_len={len(prompt)}",

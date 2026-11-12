@@ -1,12 +1,73 @@
 'use client';
 
-import React from 'react';
-import { Palette, Type, Sliders, Check, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Palette, Type, Sliders, Check, KeyRound } from 'lucide-react';
 import { useSettingsStore, EditorOptions } from '../../stores/useSettingsStore';
+import { useAgentStore } from '../../stores/useAgentStore';
 import { THEMES } from '../../utils/themeManager';
+
+const API_BASE = typeof window !== 'undefined'
+  ? (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api')
+  : 'http://127.0.0.1:8000/api';
 
 export const SettingsPanel: React.FC = () => {
   const { theme, setTheme, editorOptions, setEditorOption } = useSettingsStore();
+  const { fetchGatewayHealth } = useAgentStore();
+  const [geminiKey, setGeminiKey] = useState('');
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [claudeKey, setClaudeKey] = useState('');
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [colabUrl, setColabUrl] = useState('');
+  const [runpodUrl, setRunpodUrl] = useState('');
+  const [configStatus, setConfigStatus] = useState<Record<string, any> | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/gateway/config`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.providers) {
+          setConfigStatus(data.providers);
+          if (data.providers.ollama?.endpoint) setOllamaUrl(data.providers.ollama.endpoint);
+          if (data.providers.google_colab?.endpoint) setColabUrl(data.providers.google_colab.endpoint);
+          if (data.providers.runpod?.endpoint) setRunpodUrl(data.providers.runpod.endpoint);
+        }
+      })
+      .catch(() => { });
+  }, []);
+
+  const handleSaveProviders = async () => {
+    setSaveMessage(null);
+    try {
+      const payload: Record<string, string> = {
+        ollama_endpoint: ollamaUrl,
+        colab_endpoint: colabUrl,
+        runpod_endpoint: runpodUrl,
+      };
+      if (geminiKey.trim()) payload.gemini_api_key = geminiKey.trim();
+      if (openaiKey.trim()) payload.openai_api_key = openaiKey.trim();
+      if (claudeKey.trim()) payload.claude_api_key = claudeKey.trim();
+
+      const res = await fetch(`${API_BASE}/gateway/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConfigStatus(data.config?.providers || null);
+        setGeminiKey('');
+        setOpenaiKey('');
+        setClaudeKey('');
+        setSaveMessage('Provider settings saved.');
+        void fetchGatewayHealth();
+      } else {
+        setSaveMessage('Failed to save provider settings.');
+      }
+    } catch {
+      setSaveMessage('Backend offline.');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-[var(--bg-sidebar,#060810)] text-[var(--fg-primary,#f8fafc)] select-none overflow-y-auto p-4 space-y-6 scrollbar-thin">
@@ -35,11 +96,10 @@ export const SettingsPanel: React.FC = () => {
               <button
                 key={t.id}
                 onClick={() => setTheme(t.id)}
-                className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                  isSelected
+                className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition-all cursor-pointer ${isSelected
                     ? 'border-[var(--accent-color,#8b5cf6)] bg-[var(--selection-bg,rgba(139,92,246,0.2))] shadow-sm'
                     : 'border-[var(--border-color,#1e293b)] bg-[var(--bg-card,#0f1322)] hover:border-[var(--fg-muted,#64748b)]'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-2.5">
                   {/* Swatch Previews */}
@@ -210,6 +270,108 @@ export const SettingsPanel: React.FC = () => {
               <span className="text-xs text-[var(--fg-secondary,#cbd5e1)]">Bracket Pair Colorization</span>
             </label>
           </div>
+        </div>
+      </div>
+
+      {/* 4. AI Provider Credentials & Endpoints */}
+      <div className="space-y-3 border-t border-[var(--border-color,#1e293b)] pt-4">
+        <div className="flex items-center gap-2 text-xs font-semibold text-[var(--fg-secondary,#cbd5e1)] uppercase tracking-wider">
+          <KeyRound className="h-3.5 w-3.5 text-violet-400" />
+          <span>AI Provider Credentials</span>
+        </div>
+
+        <div className="space-y-2.5 text-xs">
+          <div>
+            <label className="flex justify-between text-[10px] font-semibold text-slate-400 uppercase mb-1">
+              <span>Google Gemini API Key</span>
+              <span className={configStatus?.google_gemini?.configured ? 'text-emerald-400' : 'text-amber-400'}>
+                {configStatus?.google_gemini?.configured ? configStatus.google_gemini.api_key_masked : 'Not set'}
+              </span>
+            </label>
+            <input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              placeholder="AIza..."
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div>
+            <label className="flex justify-between text-[10px] font-semibold text-slate-400 uppercase mb-1">
+              <span>OpenAI API Key</span>
+              <span className={configStatus?.openai?.configured ? 'text-emerald-400' : 'text-slate-500'}>
+                {configStatus?.openai?.configured ? configStatus.openai.api_key_masked : 'Not set'}
+              </span>
+            </label>
+            <input
+              type="password"
+              value={openaiKey}
+              onChange={(e) => setOpenaiKey(e.target.value)}
+              placeholder="sk-..."
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div>
+            <label className="flex justify-between text-[10px] font-semibold text-slate-400 uppercase mb-1">
+              <span>Anthropic Claude Key</span>
+              <span className={configStatus?.claude?.configured ? 'text-emerald-400' : 'text-slate-500'}>
+                {configStatus?.claude?.configured ? configStatus.claude.api_key_masked : 'Not set'}
+              </span>
+            </label>
+            <input
+              type="password"
+              value={claudeKey}
+              onChange={(e) => setClaudeKey(e.target.value)}
+              placeholder="sk-ant-..."
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 uppercase mb-1">Ollama Endpoint</label>
+            <input
+              type="text"
+              value={ollamaUrl}
+              onChange={(e) => setOllamaUrl(e.target.value)}
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 uppercase mb-1">Google Colab Endpoint</label>
+            <input
+              type="text"
+              value={colabUrl}
+              onChange={(e) => setColabUrl(e.target.value)}
+              placeholder="https://xxxx.ngrok-free.app"
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 uppercase mb-1">RunPod Endpoint</label>
+            <input
+              type="text"
+              value={runpodUrl}
+              onChange={(e) => setRunpodUrl(e.target.value)}
+              placeholder="https://api.runpod.ai/v2/..."
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void handleSaveProviders()}
+            className="w-full rounded bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold py-1.5 transition-colors cursor-pointer"
+          >
+            Save Provider Settings
+          </button>
+
+          {saveMessage && (
+            <div className="text-[10px] text-emerald-400">{saveMessage}</div>
+          )}
         </div>
       </div>
     </div>

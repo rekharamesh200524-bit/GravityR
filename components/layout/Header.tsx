@@ -14,7 +14,7 @@ export const Header: React.FC = () => {
 
   // Map providers for selection dropdown
   const providerOptions = [
-    { value: 'google', label: 'Google' },
+    { value: 'google', label: 'Google Gemini' },
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'openai', label: 'OpenAI' },
     { value: 'ollama', label: 'Ollama (Local)' },
@@ -71,7 +71,12 @@ export const Header: React.FC = () => {
         <Dropdown
           options={modelOptions}
           selectedValue={model}
-          onChange={(val) => setModel(val)}
+          onChange={(val) => {
+            setModel(val);
+            void import('../../stores/useAgentStore').then(({ useAgentStore }) => {
+              void useAgentStore.getState().selectGatewayModel(val);
+            }).catch(() => {});
+          }}
           className="w-48"
         />
 

@@ -211,11 +211,17 @@ export interface FileDiffSummary {
   changeType: 'created' | 'modified' | 'deleted' | 'renamed';
   originalContent?: string;
   modifiedContent?: string;
+  unifiedDiff?: string;
+  reviewStatus?: 'proposed' | 'applied' | 'approved' | 'rejected';
 }
+
+export type AgentMode = 'ask' | 'agent';
 
 export interface ReviewData {
   taskId: string;
   summary: string;
+  answer?: string;
+  mode?: AgentMode;
   filesChanged: FileDiffSummary[];
   warnings: ReviewWarning[];
   complexity: ComplexityLevel;

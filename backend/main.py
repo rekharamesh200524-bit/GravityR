@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database.connection import engine, Base
 from .config.settings import settings
 from .api.routes import router as api_router
+from .api.agent_routes import agent_ws_router
 from contextlib import asynccontextmanager
 from .terminal.websocket import ws_router as terminal_ws_router
 from .terminal.manager import terminal_manager
@@ -66,6 +67,7 @@ app.add_middleware(
 # Route mounting
 app.include_router(api_router, prefix="/api")
 app.include_router(terminal_ws_router)
+app.include_router(agent_ws_router)
 
 @app.get("/")
 def read_root():

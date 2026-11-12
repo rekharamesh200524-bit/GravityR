@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
+from ..config.gateway_config import gateway_config
 
 class ProviderMetadata(BaseModel):
     name: str
@@ -11,7 +12,7 @@ class ProviderMetadata(BaseModel):
 class ProviderRegistry:
     def __init__(self):
         self._providers: Dict[str, ProviderMetadata] = {}
-        self._current_provider_name: str = "google_colab"
+        self._current_provider_name: str = gateway_config.resolve_default_provider()
         self._register_default_providers()
 
     def register(self, metadata: ProviderMetadata):
@@ -39,12 +40,20 @@ class ProviderRegistry:
         return self._current_provider_name
 
     def _register_default_providers(self):
+        default_name = self._current_provider_name
         defaults = [
+            ProviderMetadata(
+                name="google_gemini",
+                displayName="Google Gemini API",
+                status="enabled",
+                isDefault=(default_name == "google_gemini"),
+                metadata={"type": "commercial_api", "connection_check": "/v1beta/models"}
+            ),
             ProviderMetadata(
                 name="google_colab",
                 displayName="Google Colab Notebook",
                 status="enabled",
-                isDefault=True,
+                isDefault=(default_name == "google_colab"),
                 metadata={"type": "cloud_colab", "connection_check": "/health"}
             ),
             ProviderMetadata(

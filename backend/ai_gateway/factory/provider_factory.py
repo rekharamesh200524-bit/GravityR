@@ -1,6 +1,7 @@
 from typing import Dict
 from ..interfaces.provider import IInferenceProvider
 from ..providers.colab import GoogleColabProvider
+from ..providers.gemini import GoogleGeminiProvider
 from ..providers.ollama import OllamaProvider
 from ..providers.runpod import RunPodProvider
 from ..providers.openai import OpenAIProvider
@@ -16,7 +17,9 @@ class ProviderFactory:
             return self._instances[name]
 
         provider: IInferenceProvider
-        if name == "google_colab":
+        if name == "google_gemini":
+            provider = GoogleGeminiProvider()
+        elif name == "google_colab":
             provider = GoogleColabProvider()
         elif name == "ollama":
             provider = OllamaProvider()

@@ -6,6 +6,7 @@ from ..ai_gateway.registry.model_registry import model_registry, ModelMetadata
 from ..ai_gateway.health.health_monitor import health_monitor
 from ..ai_gateway.manager import gateway_manager
 from ..ai_gateway.config.gateway_config import gateway_config
+from ..ai_gateway.cache.provider_cache import provider_cache
 from ..ai_gateway.factory.provider_factory import provider_factory
 from fastapi.responses import StreamingResponse
 import json
@@ -25,6 +26,36 @@ class TestPromptRequest(BaseModel):
 
 class ProviderCancelRequest(BaseModel):
     task_id: str
+
+class UpdateGatewayConfigRequest(BaseModel):
+    gemini_api_key: Optional[str] = None
+    gemini_model: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    claude_api_key: Optional[str] = None
+    ollama_endpoint: Optional[str] = None
+    runpod_endpoint: Optional[str] = None
+    runpod_api_key: Optional[str] = None
+    colab_endpoint: Optional[str] = None
+
+
+@router.get("/config")
+def get_gateway_config():
+    """Return masked provider configuration and configuration readiness."""
+    return gateway_config.get_masked_config()
+
+
+@router.post("/config")
+def update_gateway_config(req: UpdateGatewayConfigRequest):
+    """Update provider API keys or endpoints at runtime and refresh health cache."""
+    updated = gateway_config.update_config(req.model_dump())
+    if req.gemini_api_key and req.gemini_api_key.strip():
+        provider_registry.set_current_provider("google_gemini")
+        gateway_config.ACTIVE_PROVIDER = "google_gemini"
+        gateway_config.ACTIVE_MODEL = gateway_config.GEMINI_MODEL
+    provider_cache.delete("global_health_monitor")
+    return {"status": "success", "config": updated}
+
 
 @router.get("/providers", response_model=List[ProviderMetadata])
 def get_providers():

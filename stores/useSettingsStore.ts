@@ -3,11 +3,13 @@ import { AIProvider, AIModel } from '../types';
 import { applyThemeToDOM } from '../utils/themeManager';
 
 export const AVAILABLE_MODELS: AIModel[] = [
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'google', contextWindow: 1048576, description: 'Fast, lightweight model optimized for developers.' },
-  { id: 'gemini-3.5-pro', name: 'Gemini 3.5 Pro', provider: 'google', contextWindow: 2097152, description: 'Highly intelligent model for complex reasoning and coding.' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', contextWindow: 1048576, description: 'Fast, reasoning-capable model optimized for coding agents.' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', contextWindow: 2097152, description: 'Flagship reasoning model for complex architecture & multi-file edits.' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google', contextWindow: 1048576, description: 'Low-latency multimodal model for rapid iteration.' },
   { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'anthropic', contextWindow: 200000, description: 'State-of-the-art programming assistant with deep explanation.' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', contextWindow: 128000, description: 'Fast, cost-efficient OpenAI coding model.' },
   { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', contextWindow: 128000, description: 'Versatile, high-speed flagship reasoning model.' },
-  { id: 'llama3-70b', name: 'Llama 3 (70B)', provider: 'ollama', contextWindow: 8192, description: 'Powerful local model running via Ollama integration.' },
+  { id: 'qwen2.5-coder-7b-instruct', name: 'Qwen 2.5 Coder 7B', provider: 'ollama', contextWindow: 32768, description: 'Local coding model running via Ollama.' },
 ];
 
 export interface EditorOptions {
@@ -55,7 +57,7 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   provider: 'google',
-  model: 'gemini-3.5-pro',
+  model: 'gemini-2.5-flash',
   temperature: 0.2,
   maxTokens: 4096,
   theme: 'dark',
@@ -66,6 +68,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const providerModels = AVAILABLE_MODELS.filter(m => m.provider === provider);
     const defaultModel = providerModels.length > 0 ? providerModels[0].id : '';
     set({ provider, model: defaultModel });
+    const gatewayMap: Record<string, string> = {
+      google: 'google_gemini',
+      anthropic: 'claude',
+      openai: 'openai',
+      ollama: 'ollama',
+    };
+    const gwProv = gatewayMap[provider] || 'google_gemini';
+    void import('./useAgentStore').then(({ useAgentStore }) => {
+      const agent = useAgentStore.getState();
+      void agent.selectGatewayProvider(gwProv);
+      if (defaultModel) void agent.selectGatewayModel(defaultModel);
+    }).catch(() => {});
   },
 
   setModel: (model) => set({ model }),

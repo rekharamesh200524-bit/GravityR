@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import { useAgentStore } from '../../../stores/useAgentStore';
 import { useProjectStore } from '../../../stores/useProjectStore';
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore';
+import { useGitStore } from '../../../stores/useGitStore';
 
 const SEVERITY_CONFIG = {
   info:    { icon: <Info className="h-3 w-3" />,          color: 'text-blue-400 bg-blue-950/20 border-blue-500/20' },
@@ -26,7 +27,7 @@ interface ReviewPanelProps {
 }
 
 export const ReviewPanel: React.FC<ReviewPanelProps> = ({ review }) => {
-  const { approveTask, rejectTask } = useAgentStore();
+  const { approveTask, rejectTask, approveFile, rejectFile } = useAgentStore();
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
 
@@ -40,15 +41,22 @@ export const ReviewPanel: React.FC<ReviewPanelProps> = ({ review }) => {
   const impactColor = totalLines >= 150 ? 'text-red-400 border-red-500/20 bg-red-950/10' : totalLines >= 40 ? 'text-amber-400 border-amber-500/20 bg-amber-950/10' : 'text-emerald-400 border-emerald-500/20 bg-emerald-950/10';
 
   const handleFileClick = (f: any) => {
-    // Open in Monaco Diff panel
     useProjectStore.setState({
       activeFilePath: f.filePath,
       activeFileOriginalContent: f.originalContent || "",
       activeFileContent: f.modifiedContent || "",
       isEditing: true
     });
-    
-    // Add to open tabs and set active
+    useGitStore.setState({
+      activeDiff: {
+        path: f.filePath,
+        status: f.changeType === 'created' ? 'A' : f.changeType === 'deleted' ? 'D' : 'M',
+        headContent: f.originalContent || "",
+        workingContent: f.modifiedContent || "",
+        staged: false,
+      },
+      isDiffActive: true,
+    });
     void useWorkspaceStore.getState().openTab(f.filePath);
     void useWorkspaceStore.getState().setActiveTab(f.filePath);
   };
@@ -161,21 +169,52 @@ export const ReviewPanel: React.FC<ReviewPanelProps> = ({ review }) => {
           </div>
           <div className="divide-y divide-slate-950">
             {review.filesChanged.map((f, idx) => (
-              <button 
-                key={idx} 
-                onClick={() => handleFileClick(f)}
-                className="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-[#07080e] transition-colors text-left border-none cursor-pointer"
+              <div
+                key={idx}
+                className="flex items-center gap-2.5 px-4 py-3 hover:bg-[#07080e] transition-colors"
               >
-                <FileDiff className={`h-3.5 w-3.5 flex-shrink-0 ${CHANGE_COLORS[f.changeType || 'modified']}`} />
-                <div className="flex-1 min-w-0">
-                  <span className="block text-[11px] font-mono text-slate-200 truncate font-semibold">{f.filePath.split('/').pop()}</span>
-                  <span className="block text-[8px] font-mono text-slate-500 truncate mt-0.5">{f.filePath}</span>
+                <button
+                  onClick={() => handleFileClick(f)}
+                  className="flex-1 flex items-center gap-2.5 text-left border-none cursor-pointer min-w-0 bg-transparent"
+                >
+                  <FileDiff className={`h-3.5 w-3.5 flex-shrink-0 ${CHANGE_COLORS[f.changeType || 'modified']}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-mono text-slate-200 truncate font-semibold">{f.filePath.split('/').pop()}</span>
+                      {f.reviewStatus && (
+                        <span className={`text-[8px] px-1.5 py-0.5 rounded uppercase font-mono ${
+                          f.reviewStatus === 'approved' ? 'bg-emerald-500/20 text-emerald-300' :
+                          f.reviewStatus === 'rejected' ? 'bg-red-500/20 text-red-300' :
+                          'bg-slate-800 text-slate-400'
+                        }`}>
+                          {f.reviewStatus}
+                        </span>
+                      )}
+                    </div>
+                    <span className="block text-[8px] font-mono text-slate-500 truncate mt-0.5">{f.filePath}</span>
+                  </div>
+                  <div className="text-right text-[10px] font-mono flex-shrink-0 space-x-1.5">
+                    <span className="text-emerald-400">+{f.linesAdded}</span>
+                    <span className="text-red-400">-{f.linesRemoved}</span>
+                  </div>
+                </button>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => void approveFile(review.taskId, f.filePath)}
+                    title="Accept file change"
+                    className="p-1 rounded bg-emerald-950/30 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/20 cursor-pointer"
+                  >
+                    <ThumbsUp className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => void rejectFile(review.taskId, f.filePath)}
+                    title="Reject & revert file change"
+                    className="p-1 rounded bg-red-950/30 hover:bg-red-600/30 text-red-400 border border-red-500/20 cursor-pointer"
+                  >
+                    <ThumbsDown className="h-3 w-3" />
+                  </button>
                 </div>
-                <div className="text-right text-[10px] font-mono flex-shrink-0 ml-4 space-x-1.5">
-                  <span className="text-emerald-400">+{f.linesAdded}</span>
-                  <span className="text-red-400">-{f.linesRemoved}</span>
-                </div>
-              </button>
+              </div>
             ))}
           </div>
         </div>

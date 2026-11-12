@@ -31,6 +31,36 @@ class ModelRegistry:
     def _register_default_models(self):
         default_models = [
             ModelMetadata(
+                id="gemini-2.5-flash",
+                displayName="Gemini 2.5 Flash",
+                providerSupport=["google_gemini"],
+                parameterSize="Flash",
+                contextWindow=1048576,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="gemini-2.5-pro",
+                displayName="Gemini 2.5 Pro",
+                providerSupport=["google_gemini"],
+                parameterSize="Pro",
+                contextWindow=2097152,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="gemini-2.0-flash",
+                displayName="Gemini 2.0 Flash",
+                providerSupport=["google_gemini"],
+                parameterSize="Flash",
+                contextWindow=1048576,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
                 id="qwen2.5-coder-7b-instruct",
                 displayName="Qwen 2.5 Coder 7B Instruct",
                 providerSupport=["google_colab", "ollama", "runpod"],

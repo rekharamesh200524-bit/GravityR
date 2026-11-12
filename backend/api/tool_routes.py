@@ -113,8 +113,45 @@ def post_approve(req: DecisionRequest, db: Session = Depends(get_db)):
 
 @router.post("/reject")
 def post_reject(req: DecisionRequest, db: Session = Depends(get_db)):
-    """Log rejected changes to the database audit history."""
+    """Revert rejected file changes on disk and log to database audit history."""
     try:
+        session = workspace_manager.get_session(req.workspace_id) or (
+            workspace_manager.get_session(req.workspace_root) if req.workspace_root else None
+        )
+        wid = session.workspace_id if session else (req.workspace_id or req.workspace_root)
+        reverted: List[str] = []
+        skipped: List[Dict[str, str]] = []
+
+        for entry in (req.files_changed or []):
+            fpath = entry.get("filePath") or entry.get("path")
+            if not fpath or not wid:
+                continue
+            change_type = entry.get("changeType", "modified")
+            orig = entry.get("originalContent", "")
+            expected_mod = entry.get("modifiedContent")
+
+            try:
+                abs_p = tool_executor._safe_path(fpath, wid)
+                # Preserve user modifications made during review
+                if expected_mod is not None and os.path.exists(abs_p):
+                    with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
+                        current_disk = f.read()
+                    if current_disk != expected_mod and current_disk != orig:
+                        skipped.append({"filePath": fpath, "reason": "Modified by user during review"})
+                        continue
+
+                if change_type == "created":
+                    if os.path.exists(abs_p):
+                        res = tool_executor.delete_file(db, req.task_id, fpath, workspace_id=wid)
+                        if res.get("status") == "success":
+                            reverted.append(fpath)
+                else:
+                    res = tool_executor.write_file(db, req.task_id, fpath, orig, workspace_id=wid)
+                    if res.get("status") == "success":
+                        reverted.append(fpath)
+            except Exception as rev_err:
+                skipped.append({"filePath": fpath, "reason": str(rev_err)})
+
         audit = AuditLog(
             id=f"audit-{int(time.time() * 1000)}",
             task_id=req.task_id,
@@ -122,13 +159,18 @@ def post_reject(req: DecisionRequest, db: Session = Depends(get_db)):
             ai_response=req.ai_response,
             files_changed=str(req.files_changed),
             approvals="[]",
-            rejections="rejected_all",
+            rejections=str(reverted or "rejected_all"),
             execution_time=0.0,
             timestamp=time.strftime("%Y-%m-%d %H:%M:%S")
         )
         db.add(audit)
         db.commit()
-        return {"status": "success", "message": f"Task {req.task_id} rejected."}
+        return {
+            "status": "success",
+            "message": f"Task {req.task_id} rejected.",
+            "reverted_files": reverted,
+            "skipped_files": skipped,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

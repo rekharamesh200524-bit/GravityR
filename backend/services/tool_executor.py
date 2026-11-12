@@ -19,8 +19,10 @@ class ToolExecutor:
         self.workspace_path = os.path.abspath(workspace_path)
         self.backup_dir_name = backup_dir
         
-        # Protected files that cannot be deleted or written outside workspace
+        # Protected files that cannot be deleted, written, or exposed as secrets
         self.protected_basenames = {"workspace.db", ".git"}
+        self.secret_basenames = {".env", ".env.local", ".env.production", ".env.development", "id_rsa", "id_ed25519"}
+        self.secret_extensions = {".pem", ".key", ".p12", ".pfx"}
 
     def _resolve_workspace_root(self, workspace_id: Optional[str] = None) -> str:
         """Resolve the active workspace root path dynamically."""
@@ -62,9 +64,6 @@ class ToolExecutor:
         shutil.copy2(abs_path, backup_path)
         gateway_logger.info(f"Backup created for '{rel_path}' at '{backup_path}'", "ToolExecutor")
         return backup_path
-        shutil.copy2(abs_path, backup_path)
-        gateway_logger.info(f"Backup created for '{rel_path}' at '{backup_path}'", "ToolExecutor")
-        return backup_path
 
     def _verify_checksum(self, filepath: str, expected_content: str) -> bool:
         """Verify the written file matches the expected md5 checksum."""
@@ -99,12 +98,36 @@ class ToolExecutor:
 
     # ─── File Tools ─────────────────────────────────────────────
 
+    def _is_secret_file(self, abs_path: str) -> bool:
+        base = os.path.basename(abs_path).lower()
+        ext = os.path.splitext(base)[1].lower()
+        return base in self.secret_basenames or ext in self.secret_extensions
+
+    def _atomic_write(self, abs_path: str, content: str) -> None:
+        import tempfile
+        parent = os.path.dirname(abs_path)
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".gx_tmp_", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(content)
+            os.replace(tmp_path, abs_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
+
     def read_file(self, db: Session, task_id: str, path: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         """Safely read a workspace file."""
         t0 = time.time()
         try:
             abs_path = self._safe_path(path, workspace_id)
             ws_root = self._resolve_workspace_root(workspace_id)
+            if self._is_secret_file(abs_path):
+                raise PermissionError(f"Security Alert: Reading secret/environment file '{os.path.basename(abs_path)}' is restricted.")
             if not os.path.exists(abs_path):
                 raise FileNotFoundError(f"File not found: {path}")
                 
@@ -128,21 +151,17 @@ class ToolExecutor:
             abs_path = self._safe_path(path, workspace_id)
             ws_root = self._resolve_workspace_root(workspace_id)
             
-            # Prevent direct modifications of workspace metadata db
-            if os.path.basename(abs_path) in self.protected_basenames:
-                raise PermissionError(f"Write Denied: Modifying protected metadata file '{os.path.basename(abs_path)}' is forbidden.")
+            # Prevent direct modifications of workspace metadata db or secret files
+            if os.path.basename(abs_path) in self.protected_basenames or self._is_secret_file(abs_path):
+                raise PermissionError(f"Write Denied: Modifying protected file '{os.path.basename(abs_path)}' is forbidden.")
 
             # Create backup if file already exists
             backup_file = ""
             if os.path.exists(abs_path):
                 backup_file = self._create_backup(path, workspace_id)
 
-            # Ensure parent directories exist
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-
-            # Check encoding and write
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            # Atomic write
+            self._atomic_write(abs_path, content)
 
             # Verify checksum
             chk_ok = self._verify_checksum(abs_path, content)
@@ -218,7 +237,7 @@ class ToolExecutor:
         """Execute a terminal command, capturing stdout, stderr, exit code, and execution time."""
         t0 = time.time()
         # White-listed command starts
-        allowed_prefixes = ("npm", "npx", "node", "yarn", "pnpm", "composer", "php", "flutter", "git", "python", "pip", "pytest")
+        allowed_prefixes = ("npm", "npx", "node", "yarn", "pnpm", "tsc", "eslint", "prettier", "composer", "php", "flutter", "git", "python", "pip", "pytest")
         
         # Simple security parsing
         cmd_words = command.split()
@@ -322,4 +341,196 @@ class ToolExecutor:
         except Exception as e:
             elapsed = time.time() - t0
             self._log_execution(db, task_id, "git", f"Git failed: {action} ({e})", "error", elapsed)
+            return {"status": "error", "message": str(e)}
+
+    # ─── Extended Repository & File Modification Tools ──────────
+
+    _SKIP_DIRS = {"node_modules", ".git", ".gravityx_backups", ".next", "dist", "build", "__pycache__", ".venv", "venv"}
+
+    def list_files(self, db: Session, task_id: str, directory: str = ".", extension: Optional[str] = None, max_results: int = 200, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        t0 = time.time()
+        try:
+            ws_root = self._resolve_workspace_root(workspace_id)
+            target_dir = self._safe_path(directory or ".", workspace_id)
+            if not os.path.isdir(target_dir):
+                raise NotADirectoryError(f"Directory not found: {directory}")
+
+            items: List[str] = []
+            for root, dirs, files_list in os.walk(target_dir):
+                dirs[:] = sorted(d for d in dirs if d not in self._SKIP_DIRS)
+                for fname in sorted(files_list):
+                    if extension and not fname.lower().endswith(extension.lower()):
+                        continue
+                    abs_p = os.path.join(root, fname)
+                    rel_p = os.path.relpath(abs_p, ws_root).replace(os.path.sep, "/")
+                    items.append(rel_p)
+                    if len(items) >= max_results:
+                        break
+                if len(items) >= max_results:
+                    break
+
+            self._log_execution(db, task_id, "list_files", f"Listed {len(items)} files in '{directory}'", "success", time.time() - t0)
+            return {"status": "success", "files": items, "count": len(items)}
+        except Exception as e:
+            self._log_execution(db, task_id, "list_files", f"list_files failed: {e}", "error", time.time() - t0)
+            return {"status": "error", "message": str(e)}
+
+    def search_code(self, db: Session, task_id: str, query: str, max_matches: int = 50, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        t0 = time.time()
+        try:
+            ws_root = self._resolve_workspace_root(workspace_id)
+            q_lower = query.lower()
+            matches: List[Dict[str, Any]] = []
+            for root, dirs, files_list in os.walk(ws_root):
+                dirs[:] = [d for d in dirs if d not in self._SKIP_DIRS]
+                for fname in files_list:
+                    abs_p = os.path.join(root, fname)
+                    if self._is_secret_file(abs_p):
+                        continue
+                    rel_p = os.path.relpath(abs_p, ws_root).replace(os.path.sep, "/")
+                    try:
+                        with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
+                            for idx, line in enumerate(f, start=1):
+                                if q_lower in line.lower():
+                                    matches.append({
+                                        "filePath": rel_p,
+                                        "line": idx,
+                                        "preview": line.strip()[:200],
+                                    })
+                                    if len(matches) >= max_matches:
+                                        break
+                    except Exception:
+                        continue
+                    if len(matches) >= max_matches:
+                        break
+                if len(matches) >= max_matches:
+                    break
+
+            self._log_execution(db, task_id, "search_code", f"Searched '{query}': {len(matches)} match(es)", "success", time.time() - t0)
+            return {"status": "success", "results": matches, "count": len(matches)}
+        except Exception as e:
+            self._log_execution(db, task_id, "search_code", f"search_code failed: {e}", "error", time.time() - t0)
+            return {"status": "error", "message": str(e)}
+
+    def find_references(self, db: Session, task_id: str, symbol: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        import re
+        t0 = time.time()
+        try:
+            ws_root = self._resolve_workspace_root(workspace_id)
+            pattern = re.compile(rf"\b{re.escape(symbol)}\b")
+            refs: List[Dict[str, Any]] = []
+            for root, dirs, files_list in os.walk(ws_root):
+                dirs[:] = [d for d in dirs if d not in self._SKIP_DIRS]
+                for fname in files_list:
+                    abs_p = os.path.join(root, fname)
+                    if self._is_secret_file(abs_p):
+                        continue
+                    rel_p = os.path.relpath(abs_p, ws_root).replace(os.path.sep, "/")
+                    try:
+                        with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
+                            for idx, line in enumerate(f, start=1):
+                                if pattern.search(line):
+                                    refs.append({"filePath": rel_p, "line": idx, "code": line.strip()[:200]})
+                                    if len(refs) >= 80:
+                                        break
+                    except Exception:
+                        continue
+                    if len(refs) >= 80:
+                        break
+                if len(refs) >= 80:
+                    break
+
+            self._log_execution(db, task_id, "find_references", f"Found {len(refs)} references to '{symbol}'", "success", time.time() - t0)
+            return {"status": "success", "references": refs, "count": len(refs)}
+        except Exception as e:
+            self._log_execution(db, task_id, "find_references", f"find_references failed: {e}", "error", time.time() - t0)
+            return {"status": "error", "message": str(e)}
+
+    def get_project_structure(self, db: Session, task_id: str, max_depth: int = 4, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        t0 = time.time()
+        try:
+            ws_root = self._resolve_workspace_root(workspace_id)
+            entries: List[str] = []
+            for root, dirs, files_list in os.walk(ws_root):
+                rel_root = os.path.relpath(root, ws_root).replace(os.path.sep, "/")
+                depth = 0 if rel_root == "." else rel_root.count("/") + 1
+                dirs[:] = sorted(d for d in dirs if d not in self._SKIP_DIRS)
+                if depth > max_depth:
+                    dirs[:] = []
+                    continue
+                prefix = "" if rel_root == "." else rel_root + "/"
+                for d in dirs:
+                    entries.append(f"{prefix}{d}/")
+                for fname in sorted(files_list):
+                    entries.append(f"{prefix}{fname}")
+                if len(entries) >= 300:
+                    break
+
+            self._log_execution(db, task_id, "get_project_structure", f"Collected {len(entries)} entries", "success", time.time() - t0)
+            return {"status": "success", "root": os.path.basename(ws_root), "entries": entries, "count": len(entries)}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def inspect_file(self, db: Session, task_id: str, path: str, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        import re
+        t0 = time.time()
+        try:
+            read_res = self.read_file(db, task_id, path, workspace_id=workspace_id)
+            if read_res.get("status") != "success":
+                return read_res
+            content = read_res["content"]
+            lines = content.splitlines()
+            symbols = re.findall(r"(?:export\s+(?:const|function|class|interface|type|enum)|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", content)
+            return {
+                "status": "success",
+                "path": path,
+                "lines": len(lines),
+                "size_bytes": len(content.encode("utf-8")),
+                "symbols": list(dict.fromkeys(symbols)),
+                "preview": "\n".join(lines[:40]),
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def create_file(self, db: Session, task_id: str, path: str, content: str, overwrite: bool = False, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            abs_path = self._safe_path(path, workspace_id)
+            if os.path.exists(abs_path) and not overwrite:
+                return {"status": "error", "message": f"File already exists: {path}. Use write_file or replace_in_file to modify it."}
+            return self.write_file(db, task_id, path, content, workspace_id=workspace_id)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def replace_in_file(self, db: Session, task_id: str, path: str, target: str, replacement: str, replace_all: bool = False, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        t0 = time.time()
+        try:
+            abs_path = self._safe_path(path, workspace_id)
+            if os.path.basename(abs_path) in self.protected_basenames or self._is_secret_file(abs_path):
+                raise PermissionError(f"Write Denied: Modifying protected file '{os.path.basename(abs_path)}' is forbidden.")
+            if not os.path.exists(abs_path):
+                raise FileNotFoundError(f"File not found: {path}")
+
+            with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
+                original = f.read()
+
+            occurrences = original.count(target)
+            if occurrences == 0:
+                return {"status": "error", "message": f"Target snippet not found in '{path}'. Read the file first to verify exact text."}
+
+            backup_file = self._create_backup(path, workspace_id)
+            new_content = original.replace(target, replacement) if replace_all else original.replace(target, replacement, 1)
+            self._atomic_write(abs_path, new_content)
+
+            count = occurrences if replace_all else 1
+            self._log_execution(db, task_id, "replace_in_file", f"Replaced {count} occurrence(s) in {path}", "success", time.time() - t0)
+            return {
+                "status": "success",
+                "path": path,
+                "replacements": count,
+                "backup": backup_file,
+                "original_content": original,
+                "modified_content": new_content,
+            }
+        except Exception as e:
+            self._log_execution(db, task_id, "replace_in_file", f"replace_in_file failed for {path}: {e}", "error", time.time() - t0)
             return {"status": "error", "message": str(e)}

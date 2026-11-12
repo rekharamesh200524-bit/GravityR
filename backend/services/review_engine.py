@@ -47,6 +47,18 @@ class ReviewEngine:
                 added += (j2 - j1)
         return added, removed
 
+    def generate_unified_diff(self, file_path: str, original_text: str, modified_text: str) -> str:
+        """Generate a standard unified diff string between original and modified contents."""
+        orig_lines = original_text.splitlines(keepends=True)
+        mod_lines = modified_text.splitlines(keepends=True)
+        diff_lines = difflib.unified_diff(
+            orig_lines,
+            mod_lines,
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+        )
+        return "".join(diff_lines)
+
     def review_response(self, task_id: str, prompt: str, ai_response_str: str) -> Dict[str, Any]:
         """
         Parse raw AI response JSON, identify changed files,

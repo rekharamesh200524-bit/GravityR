@@ -39,6 +39,8 @@ export const AiExecutionPanel: React.FC = () => {
     clearQueue,
     setProvider,
     clearLogs,
+    agentMode,
+    setAgentMode,
     workspaceWarning,
     clearWorkspaceWarning,
 
@@ -167,6 +169,7 @@ export const AiExecutionPanel: React.FC = () => {
                 void selectGatewayProvider(prov);
                 // Also sync local activeProvider state representation
                 const map: Record<string, ProviderName> = {
+                  google_gemini: 'google',
                   google_colab: 'google',
                   ollama: 'ollama',
                   runpod: 'runpod',
@@ -205,7 +208,10 @@ export const AiExecutionPanel: React.FC = () => {
               Gateway: <strong className="text-slate-400">{gatewayStatus.toUpperCase()}</strong>
             </span>
             <span className="flex items-center gap-1">
-              <span className={`h-1.5 w-1.5 rounded-full ${providerStatus === 'online' ? 'bg-emerald-400' : 'bg-red-400'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${
+                providerStatus === 'CONNECTED' || providerStatus === 'online' ? 'bg-emerald-400' :
+                providerStatus === 'NOT_CONFIGURED' ? 'bg-amber-400' : 'bg-red-400'
+              }`} />
               Provider: <strong className="text-slate-400">{(providerStatus || 'offline').toUpperCase()}</strong>
             </span>
             {latencyMs !== null && (
@@ -222,13 +228,41 @@ export const AiExecutionPanel: React.FC = () => {
 
       {/* ── Task Composer ────────────────────────────── */}
       <div className="p-4 border-b border-slate-900 bg-slate-950/20 space-y-3 flex-shrink-0">
-        <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+        <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between gap-2">
           <span>Submit Instruction</span>
-          {connectionStatus && (
-            <span className="text-[9px] text-violet-400 bg-violet-950/40 border border-violet-850 px-1.5 py-0.5 rounded animate-pulse">
-              {connectionStatus.toUpperCase()}
-            </span>
-          )}
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center rounded-md bg-slate-900 border border-slate-800 p-0.5 text-[9px]">
+              <button
+                type="button"
+                onClick={() => setAgentMode('agent')}
+                className={`px-2 py-0.5 rounded font-semibold transition-colors cursor-pointer ${
+                  agentMode === 'agent'
+                    ? 'bg-violet-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Agent Mode: Edit files, run commands, validate & review diffs"
+              >
+                Agent
+              </button>
+              <button
+                type="button"
+                onClick={() => setAgentMode('ask')}
+                className={`px-2 py-0.5 rounded font-semibold transition-colors cursor-pointer ${
+                  agentMode === 'ask'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Ask Mode: Read-only repository Q&A without modifying files"
+              >
+                Ask
+              </button>
+            </div>
+            {connectionStatus && (
+              <span className="text-[9px] text-violet-400 bg-violet-950/40 border border-violet-850 px-1.5 py-0.5 rounded animate-pulse">
+                {connectionStatus.toUpperCase()}
+              </span>
+            )}
+          </div>
         </div>
         {/* Workspace Warning Alert */}
         {workspaceWarning && (
@@ -280,11 +314,29 @@ export const AiExecutionPanel: React.FC = () => {
                 className="flex items-center gap-1.5 rounded bg-violet-650/80 hover:bg-violet-600 text-white disabled:bg-slate-800 disabled:text-slate-500 px-3 py-1.5 text-[10px] font-semibold transition-all shadow-md cursor-pointer"
               >
                 <Play className="h-3 w-3" />
-                <span>Run Agent Task</span>
+                <span>{agentMode === 'ask' ? 'Ask Repository' : 'Run Agent Task'}</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Provider / Execution Error Banner */}
+        {currentTask?.status === 'failed' && currentTask.errorMessage && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-[11px]">
+            <AlertTriangle className="h-3.5 w-3.5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 break-words">
+              <div className="font-semibold text-red-200">Execution Failed</div>
+              <div className="text-[10px] text-red-300/90 mt-0.5">{currentTask.errorMessage}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Ask Mode / Summary Answer Card */}
+        {currentTask?.status === 'completed' && reviewData?.answer && (
+          <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800 text-[11px] text-slate-200 max-h-40 overflow-y-auto whitespace-pre-wrap">
+            {reviewData.answer}
+          </div>
+        )}
 
         {/* Live streaming performance metrics display */}
         {generationTime > 0 && (

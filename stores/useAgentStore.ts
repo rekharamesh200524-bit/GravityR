@@ -47,8 +47,8 @@ export interface GatewayModel {
 }
 
 const API_BASE = typeof window !== 'undefined'
-  ? (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api')
-  : 'http://localhost:8000/api';
+  ? (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api')
+  : 'http://127.0.0.1:8000/api';
 
 // ─── State Interface ──────────────────────────────────────────
 interface AgentState {
@@ -68,6 +68,8 @@ interface AgentState {
 
   // Settings & Logs
   activeProvider: ProviderName;
+  agentMode: 'ask' | 'agent';
+  setAgentMode: (mode: 'ask' | 'agent') => void;
   logs: AgentLogEntry[];
 
   // Gateway status extensions
@@ -107,12 +109,15 @@ interface AgentState {
 
   // Actions
   submitTask: (prompt: string, priority?: QueuePriority) => Promise<void>;
+  processQueue: () => Promise<void>;
   cancelTask: (taskId: string) => void;
   clearQueue: () => void;
   setProvider: (provider: ProviderName) => void;
   clearLogs: () => void;
   approveTask: (taskId: string) => Promise<void>;
   rejectTask: (taskId: string) => Promise<void>;
+  approveFile: (taskId: string, filePath: string) => Promise<void>;
+  rejectFile: (taskId: string, filePath: string) => Promise<void>;
 
   // Gateway Actions
   fetchGatewayHealth: () => Promise<void>;
@@ -130,6 +135,16 @@ function genId(): string {
 function initialTimeline(): TimelineStage[] {
   return TIMELINE_STAGES.map((s) => ({ ...s, status: 'pending' as const }));
 }
+
+const taskAbortControllers = new Map<string, AbortController>();
+let isQueueProcessing = false;
+
+const PRIORITY_RANK: Record<QueuePriority, number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
 
 export const useAgentStore = create<AgentState>((set, get) => {
   // Wire ExecutionEngine timeline updates into Zustand
@@ -154,12 +169,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
     validationResult: null,
     reviewData: null,
     activeProvider: 'google',
+    agentMode: 'agent',
+    setAgentMode: (mode) => set({ agentMode: mode }),
     logs: [],
 
     // Gateway states default
     gatewayStatus: 'offline',
-    currentProvider: 'google_colab',
-    currentModel: 'qwen2.5-coder-7b-instruct',
+    currentProvider: 'google_gemini',
+    currentModel: 'gemini-2.5-flash',
     providerStatus: 'unknown',
     providerHealth: null,
     latencyMs: null,
@@ -203,106 +220,198 @@ export const useAgentStore = create<AgentState>((set, get) => {
         queue: [...state.queue, { task, position: state.queue.length + 1 }],
       }));
 
-      set({
-        currentTask: { ...task, status: 'planning', startedAt: Date.now() },
-        timeline: initialTimeline(),
-        plannerOutput: null,
-        contextOutput: null,
-        promptObject: null,
-        validationResult: null,
-        reviewData: null,
-        connectionStatus: 'Connecting',
-        optimizedPrompt: null,
-      });
+      await get().processQueue();
+    },
+
+    processQueue: async () => {
+      if (isQueueProcessing) return;
+      isQueueProcessing = true;
 
       try {
-        const { useMemoryStore } = await import('./useMemoryStore');
-        const memoryState = useMemoryStore.getState();
-        const activeFile = workspaceState.selectedFilePath || workspaceState.activeTab || null;
+        while (true) {
+          const queuedItems = get().queue.filter((q) => q.task.status === 'queued');
+          if (queuedItems.length === 0) break;
 
-        // Transition states during run setup
-        set({ connectionStatus: 'Sending Context' });
-        
-        // Fetch active provider config before execution
-        await get().fetchGatewayHealth();
+          queuedItems.sort(
+            (a, b) =>
+              (PRIORITY_RANK[a.task.priority] ?? 2) - (PRIORITY_RANK[b.task.priority] ?? 2) ||
+              a.task.createdAt - b.task.createdAt,
+          );
+          const nextItem = queuedItems[0];
+          const task = nextItem.task;
+          const startedAt = Date.now();
+          const controller = new AbortController();
+          taskAbortControllers.set(task.id, controller);
 
-        set({ connectionStatus: 'Waiting' });
-        const startExecutionTime = Date.now();
+          // Transition both currentTask and queue item from 'queued' -> 'planning' (displayed as Running)
+          set((state) => ({
+            currentTask: { ...task, status: 'planning', startedAt },
+            queue: state.queue.map((q) =>
+              q.task.id === task.id
+                ? { ...q, task: { ...q.task, status: 'planning', startedAt } }
+                : q
+            ),
+            timeline: initialTimeline(),
+            plannerOutput: null,
+            contextOutput: null,
+            promptObject: null,
+            validationResult: null,
+            reviewData: null,
+            connectionStatus: 'Sending Context',
+            optimizedPrompt: null,
+          }));
 
-        const result = await executionEngine.run(
-          { ...task, status: 'planning', startedAt: Date.now() },
-          workspaceState.fileTree,
-          {
-            provider: get().activeProvider,
-            workspaceName: workspaceState.currentProject?.name ?? 'GravityX Workspace',
-            workspaceId: workspaceId || undefined,
-            workspaceRoot: workspaceRoot || undefined,
-            activeFile: activeFile || undefined,
-            memoryFacts: memoryState.memories.map((m) => m.content),
-            projectRules: [
-              'Use TypeScript strict mode.',
-              'Follow the existing file structure.',
-              'Preserve all existing functionality.',
-              'Use Tailwind CSS for styling.',
-            ],
-          },
-        );
+          try {
+            const [{ useWorkspaceStore }, { useMemoryStore }] = await Promise.all([
+              import('./useWorkspaceStore'),
+              import('./useMemoryStore'),
+            ]);
+            const workspaceState = useWorkspaceStore.getState();
+            const memoryState = useMemoryStore.getState();
+            const workspaceRoot = workspaceState.workspaceRoot || workspaceState.currentProject?.path || null;
+            const workspaceId = workspaceState.activeWorkspaceId || workspaceState.currentProject?.id || null;
+            const activeFile = workspaceState.selectedFilePath || workspaceState.activeTab || null;
 
-        const latencyVal = Date.now() - startExecutionTime;
-        set({ 
-          connectionStatus: 'Completed',
-          latencyMs: latencyVal
-        });
+            // Refresh health in the background without blocking execution
+            void get().fetchGatewayHealth();
 
-        const isSuccess = result.status === 'completed';
-        const finalStatus = isSuccess ? 'completed' : 'failed';
-        const finalError = isSuccess ? undefined : (result.error || 'Task execution failed');
+            if (controller.signal.aborted) {
+              throw new Error('Task cancelled by user.');
+            }
 
-        set((state) => ({
-          plannerOutput: result.plannerOutput,
-          contextOutput: result.contextOutput,
-          promptObject: result.promptObject,
-          validationResult: result.validationResult,
-          reviewData: result.reviewData,
-          timeline: result.timeline,
-          currentTask: state.currentTask
-            ? {
-                ...state.currentTask,
-                status: finalStatus,
-                completedAt: Date.now(),
-                errorMessage: finalError,
-              }
-            : null,
-          queue: state.queue.map((q) =>
-            q.task.id === task.id
-              ? { ...q, task: { ...q.task, status: finalStatus, errorMessage: finalError } }
-              : q
-          ),
-        }));
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        agentLogger.error('ExecutionEngine', `Task ${task.id} failed: ${errorMessage}`);
-        set((state) => ({
-          connectionStatus: null,
-          currentTask: state.currentTask
-            ? { ...state.currentTask, status: 'failed', errorMessage }
-            : null,
-          queue: state.queue.map((q) =>
-            q.task.id === task.id ? { ...q, task: { ...q.task, status: 'failed', errorMessage } } : q
-          ),
-        }));
+            set({ connectionStatus: 'Waiting' });
+            const startExecutionTime = Date.now();
+
+            const result = await executionEngine.run(
+              { ...task, status: 'planning', startedAt },
+              workspaceState.fileTree,
+              {
+                provider: get().activeProvider,
+                backendProvider: get().currentProvider || undefined,
+                model: get().currentModel || undefined,
+                mode: get().agentMode,
+                workspaceName: workspaceState.currentProject?.name ?? 'GravityX Workspace',
+                workspaceId: workspaceId || undefined,
+                workspaceRoot: workspaceRoot || undefined,
+                activeFile: activeFile || undefined,
+                memoryFacts: memoryState.memories.map((m) => m.content),
+                projectRules: [
+                  'Use TypeScript strict mode.',
+                  'Follow the existing file structure.',
+                  'Preserve all existing functionality.',
+                  'Use Tailwind CSS for styling.',
+                ],
+                signal: controller.signal,
+              },
+            );
+
+            const latencyVal = Date.now() - startExecutionTime;
+            const wasCancelled =
+              controller.signal.aborted ||
+              result.status === 'cancelled' ||
+              get().queue.find((q) => q.task.id === task.id)?.task.status === 'cancelled';
+
+            const finalStatus: AgentTask['status'] = wasCancelled
+              ? 'cancelled'
+              : result.status === 'completed'
+                ? 'completed'
+                : 'failed';
+            const finalError =
+              finalStatus === 'failed' ? (result.error || 'Task execution failed') : undefined;
+
+            set((state) => ({
+              connectionStatus: finalStatus === 'cancelled' ? null : 'Completed',
+              latencyMs: latencyVal,
+              plannerOutput: result.plannerOutput,
+              contextOutput: result.contextOutput,
+              promptObject: result.promptObject,
+              validationResult: result.validationResult,
+              reviewData: result.reviewData,
+              timeline: result.timeline,
+              currentTask:
+                state.currentTask?.id === task.id
+                  ? {
+                      ...state.currentTask,
+                      status: finalStatus,
+                      completedAt: Date.now(),
+                      errorMessage: finalError,
+                    }
+                  : state.currentTask,
+              queue: state.queue.map((q) =>
+                q.task.id === task.id
+                  ? {
+                      ...q,
+                      task: {
+                        ...q.task,
+                        status: finalStatus,
+                        completedAt: Date.now(),
+                        errorMessage: finalError,
+                      },
+                    }
+                  : q
+              ),
+            }));
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            const wasCancelled =
+              controller.signal.aborted ||
+              get().queue.find((q) => q.task.id === task.id)?.task.status === 'cancelled';
+            const errStatus: AgentTask['status'] = wasCancelled ? 'cancelled' : 'failed';
+
+            if (!wasCancelled) {
+              agentLogger.error('ExecutionEngine', `Task ${task.id} failed: ${errorMessage}`);
+            }
+
+            set((state) => ({
+              connectionStatus: null,
+              currentTask:
+                state.currentTask?.id === task.id
+                  ? {
+                      ...state.currentTask,
+                      status: errStatus,
+                      completedAt: Date.now(),
+                      errorMessage: wasCancelled ? undefined : errorMessage,
+                    }
+                  : state.currentTask,
+              queue: state.queue.map((q) =>
+                q.task.id === task.id
+                  ? {
+                      ...q,
+                      task: {
+                        ...q.task,
+                        status: errStatus,
+                        completedAt: Date.now(),
+                        errorMessage: wasCancelled ? undefined : errorMessage,
+                      },
+                    }
+                  : q
+              ),
+            }));
+          } finally {
+            taskAbortControllers.delete(task.id);
+          }
+        }
+      } finally {
+        isQueueProcessing = false;
       }
     },
 
     cancelTask: (taskId: string) => {
+      const controller = taskAbortControllers.get(taskId);
+      if (controller) {
+        controller.abort();
+        taskAbortControllers.delete(taskId);
+      }
       executionEngine.cancel();
       set((state) => ({
-        connectionStatus: null,
+        connectionStatus: state.currentTask?.id === taskId ? null : state.connectionStatus,
         currentTask: state.currentTask?.id === taskId
-          ? { ...state.currentTask, status: 'cancelled' }
+          ? { ...state.currentTask, status: 'cancelled', completedAt: Date.now() }
           : state.currentTask,
         queue: state.queue.map((q) =>
-          q.task.id === taskId ? { ...q, task: { ...q.task, status: 'cancelled' } } : q
+          q.task.id === taskId
+            ? { ...q, task: { ...q.task, status: 'cancelled', completedAt: Date.now() } }
+            : q
         ),
       }));
     },
@@ -315,7 +424,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       set({ activeProvider: provider });
       // Keep selected default synced with active Provider
       const map: Record<ProviderName, string> = {
-        google: 'google_colab',
+        google: 'google_gemini',
         ollama: 'ollama',
         runpod: 'runpod',
         openai: 'openai',
@@ -331,8 +440,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     // ─── Gateway actions ───────────────────────────────────────
     fetchGatewayHealth: async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
       try {
-        const res = await fetch(`${API_BASE}/gateway/health`);
+        const res = await fetch(`${API_BASE}/gateway/health`, { signal: controller.signal });
         if (!res.ok) throw new Error();
         const data = await res.json();
         const currentName = data.current_provider;
@@ -341,12 +452,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
         set({
           gatewayStatus: data.status === 'online' || data.status === 'degraded' ? 'online' : 'offline',
           currentProvider: currentName,
-          providerStatus: currentStatus ? (currentStatus.status as string) : 'offline',
+          providerStatus: currentStatus
+            ? String(currentStatus.provider_status || currentStatus.status || 'offline')
+            : 'offline',
           providerHealth: currentStatus || null,
           latencyMs: currentStatus ? (currentStatus.latency_ms as number) : null,
         });
       } catch {
         set({ gatewayStatus: 'offline', providerStatus: 'offline', providerHealth: null });
+      } finally {
+        clearTimeout(timeoutId);
       }
     },
 
@@ -510,25 +625,108 @@ export const useAgentStore = create<AgentState>((set, get) => {
     rejectTask: async (taskId: string) => {
       const state = get();
       try {
+        const { useWorkspaceStore } = await import('./useWorkspaceStore');
+        const ws = useWorkspaceStore.getState();
         await fetch(`${API_BASE}/reject`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             task_id: taskId,
             prompt: state.currentTask?.prompt || "",
-            files_changed: state.reviewData?.filesChanged || []
+            files_changed: state.reviewData?.filesChanged || [],
+            workspace_id: ws.activeWorkspaceId || ws.currentProject?.id,
+            workspace_root: ws.workspaceRoot || ws.currentProject?.path,
           })
         });
+        await ws.triggerRescan();
+        await ws.fetchTree();
+        const { useGitStore } = await import('./useGitStore');
+        await useGitStore.getState().fetchGitStatus();
+        useGitStore.setState({ isDiffActive: false, activeDiff: null });
       } catch (e) {
         console.error(e);
       }
 
-      if (state.currentTask) {
-        set({
-          currentTask: { ...state.currentTask, status: 'failed' },
-          connectionStatus: null
+      set((s) => ({
+        reviewData: s.reviewData
+          ? {
+              ...s.reviewData,
+              filesChanged: s.reviewData.filesChanged.map((f) => ({ ...f, reviewStatus: 'rejected' })),
+            }
+          : null,
+        currentTask: s.currentTask ? { ...s.currentTask, status: 'cancelled' } : null,
+        connectionStatus: null,
+      }));
+    },
+
+    approveFile: async (taskId: string, filePath: string) => {
+      const state = get();
+      const target = state.reviewData?.filesChanged.find((f) => f.filePath === filePath);
+      if (!target) return;
+      try {
+        const { useWorkspaceStore } = await import('./useWorkspaceStore');
+        const ws = useWorkspaceStore.getState();
+        await fetch(`${API_BASE}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_id: taskId,
+            prompt: state.currentTask?.prompt || '',
+            files_changed: [target],
+            workspace_id: ws.activeWorkspaceId || ws.currentProject?.id,
+            workspace_root: ws.workspaceRoot || ws.currentProject?.path,
+          }),
         });
+      } catch (e) {
+        console.error(e);
       }
+      set((s) => ({
+        reviewData: s.reviewData
+          ? {
+              ...s.reviewData,
+              filesChanged: s.reviewData.filesChanged.map((f) =>
+                f.filePath === filePath ? { ...f, reviewStatus: 'approved' } : f
+              ),
+            }
+          : null,
+      }));
+    },
+
+    rejectFile: async (taskId: string, filePath: string) => {
+      const state = get();
+      const target = state.reviewData?.filesChanged.find((f) => f.filePath === filePath);
+      if (!target) return;
+      try {
+        const { useWorkspaceStore } = await import('./useWorkspaceStore');
+        const ws = useWorkspaceStore.getState();
+        await fetch(`${API_BASE}/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_id: taskId,
+            prompt: state.currentTask?.prompt || '',
+            files_changed: [target],
+            workspace_id: ws.activeWorkspaceId || ws.currentProject?.id,
+            workspace_root: ws.workspaceRoot || ws.currentProject?.path,
+          }),
+        });
+        await ws.triggerRescan();
+        await ws.fetchTree();
+        const { useGitStore } = await import('./useGitStore');
+        await useGitStore.getState().fetchGitStatus();
+      } catch (e) {
+        console.error(e);
+      }
+      set((s) => ({
+        reviewData: s.reviewData
+          ? {
+              ...s.reviewData,
+              filesChanged: s.reviewData.filesChanged.map((f) =>
+                f.filePath === filePath ? { ...f, reviewStatus: 'rejected' } : f
+              ),
+            }
+          : null,
+      }));
     }
   };
 });
