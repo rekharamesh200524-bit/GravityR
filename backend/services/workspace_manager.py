@@ -26,7 +26,7 @@ class WorkspaceManager:
     def __init__(self):
         self._sessions: Dict[str, WorkspaceSession] = {}
         self._active_workspace_id: Optional[str] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def open_session(self, root_path: str, workspace_id: Optional[str] = None, project_name: Optional[str] = None) -> WorkspaceSession:
         clean_path = root_path.strip().strip('"\'')
