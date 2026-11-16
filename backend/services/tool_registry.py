@@ -300,10 +300,20 @@ _register(ToolDefinition(
 
 
 def resolve_tool(name: str) -> Optional[ToolDefinition]:
-    if name in TOOL_REGISTRY:
-        return TOOL_REGISTRY[name]
+    if not name:
+        return None
+    raw = name.strip()
+    if raw in TOOL_REGISTRY:
+        return TOOL_REGISTRY[raw]
     for defn in TOOL_REGISTRY.values():
-        if name in defn.aliases:
+        if raw in defn.aliases:
+            return defn
+    # Strip namespace prefix if any (e.g., repo_browser.read_file or tools__write_file)
+    clean = raw.split(".")[-1].split("__")[-1].strip()
+    if clean in TOOL_REGISTRY:
+        return TOOL_REGISTRY[clean]
+    for defn in TOOL_REGISTRY.values():
+        if clean in defn.aliases:
             return defn
     return None
 

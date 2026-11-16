@@ -12,6 +12,7 @@ from .workspace_manager import workspace_manager
 from ..database.connection import SessionLocal
 from ..database.models import RepositoryIndex, Project
 from ..ai_gateway.manager import gateway_manager
+from ..ai_gateway.config.gateway_config import gateway_config
 from ..ai_gateway.logging.gateway_logger import gateway_logger
 from ..prompt_intelligence.pipeline import PromptIntelligencePipeline
 
@@ -403,10 +404,11 @@ class AgentRunner:
                         "files": parsed["files"],
                         "review": parsed.get("review", ""),
                     }
-                elif "tool" in parsed:
+                elif "tool" in parsed or "name" in parsed:
+                    tool_n = parsed.get("tool") or parsed.get("name")
                     return {
                         "action": "tool_call",
-                        "tool": parsed.get("tool"),
+                        "tool": tool_n,
                         "arguments": parsed.get("arguments", parsed.get("parameters", {})),
                     }
         except Exception:
@@ -418,10 +420,11 @@ class AgentRunner:
             try:
                 sub = json.loads(content[s_idx:e_idx])
                 if isinstance(sub, dict):
-                    if sub.get("type") == "tool_call" or "tool" in sub:
+                    if sub.get("type") == "tool_call" or "tool" in sub or "name" in sub:
+                        tool_n = sub.get("tool") or sub.get("name")
                         return {
                             "action": "tool_call",
-                            "tool": sub.get("tool"),
+                            "tool": tool_n,
                             "arguments": sub.get("arguments", sub.get("parameters", {})),
                         }
                     if sub.get("type") == "complete":
@@ -529,6 +532,15 @@ class AgentRunner:
                 "observations": observations,
             }
 
+        # Sanitize provider and model mismatch
+        target_provider = (provider or gateway_config.ACTIVE_PROVIDER or "groq").lower()
+        if "groq" in target_provider:
+            if not model or "gemini" in (model or "").lower() or "claude" in (model or "").lower():
+                model = gateway_config.GROQ_MODEL or "qwen/qwen3.8-27b"
+        elif "gemini" in target_provider or "google" in target_provider:
+            if not model or "2.5-flash" in (model or ""):
+                model = gateway_config.ACTIVE_MODEL or "gemini-3.5-flash"
+
         def emit(stage: str, status: str, detail: str = "", extra: Optional[Dict[str, Any]] = None):
             entry: Dict[str, Any] = {
                 "id": stage.lower(),
@@ -602,10 +614,23 @@ class AgentRunner:
                 if step_queue:
                     ai_step = step_queue.pop(0)
                 else:
-                    obs_payload = observations[-8:] if observations else []
+                    # Compact observations and context to preserve token quota and prevent TPM limits
+                    obs_payload = []
+                    for obs in observations[-5:]:
+                        obs_copy = dict(obs)
+                        res = obs_copy.get("result")
+                        if isinstance(res, dict):
+                            res_copy = dict(res)
+                            inner_val = res_copy.get("result")
+                            if isinstance(inner_val, str) and len(inner_val) > 1200:
+                                res_copy["result"] = inner_val[:1200] + "\n...[truncated for token efficiency]"
+                            obs_copy["result"] = res_copy
+                        obs_payload.append(obs_copy)
+
+                    turn_context = [{"path": c["path"]} for c in context_files_summary] if iteration > 1 else context_files_summary
                     turn_prompt = (
                         f"User Prompt:\n{prompt}\n\n"
-                        f"Repository Context Files:\n{json.dumps(context_files_summary, indent=1)}\n\n"
+                        f"Repository Context Files:\n{json.dumps(turn_context, indent=1)}\n\n"
                         f"Project Rules:\n{json.dumps(ctx.get('rules', []))}\n\n"
                         f"Previous Tool Observations ({len(observations)} total):\n{json.dumps(obs_payload, indent=1)}\n\n"
                         f"Iteration {iteration}/{max_iters}. Decide the next JSON action."
@@ -645,7 +670,9 @@ class AgentRunner:
                 action = ai_step.get("action")
 
                 if action == "tool_call":
-                    tool = ai_step.get("tool", "")
+                    raw_tool = ai_step.get("tool", "")
+                    defn = resolve_tool(raw_tool)
+                    tool = defn.name if defn else raw_tool
                     args = ai_step.get("arguments", {})
 
                     if tool in ("read_file", "list_files", "search_code", "search_files", "find_references", "get_project_structure", "inspect_file"):

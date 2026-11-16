@@ -12,6 +12,10 @@ from ..config.gateway_config import gateway_config
 
 
 VERIFIED_GEMINI_MODELS: List[str] = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "gemini-2.0-flash",
@@ -32,7 +36,11 @@ class GoogleGeminiProvider(IInferenceProvider):
         return True
 
     def _get_api_key(self) -> str:
-        return (gateway_config.GEMINI_API_KEY or "").strip()
+        key = (gateway_config.GEMINI_API_KEY or "").strip()
+        if not key:
+            gateway_config.reload_from_env()
+            key = (gateway_config.GEMINI_API_KEY or "").strip()
+        return key
 
     def _build_client(self, timeout_seconds: Optional[int] = None) -> genai.Client:
         api_key = self._get_api_key()
@@ -51,12 +59,12 @@ class GoogleGeminiProvider(IInferenceProvider):
         return True
 
     def _resolve_model(self, model_id: Optional[str]) -> str:
-        candidate = (model_id or gateway_config.GEMINI_MODEL or "gemini-2.5-flash").strip()
+        candidate = (model_id or gateway_config.GEMINI_MODEL or "gemini-3.5-flash").strip()
         if candidate.startswith("models/"):
             candidate = candidate[len("models/"):]
         if "gemini" in candidate.lower():
             return candidate
-        return gateway_config.GEMINI_MODEL or "gemini-2.5-flash"
+        return gateway_config.GEMINI_MODEL or "gemini-3.5-flash"
 
     def _classify_api_error(self, exc: Exception) -> tuple[str, str, int]:
         """Map SDK / network exceptions to safe status codes and messages without leaking secrets."""

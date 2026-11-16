@@ -3,9 +3,12 @@ import { AIProvider, AIModel } from '../types';
 import { applyThemeToDOM } from '../utils/themeManager';
 
 export const AVAILABLE_MODELS: AIModel[] = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', contextWindow: 1048576, description: 'Fast, reasoning-capable model optimized for coding agents.' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', contextWindow: 2097152, description: 'Flagship reasoning model for complex architecture & multi-file edits.' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google', contextWindow: 1048576, description: 'Low-latency multimodal model for rapid iteration.' },
+  { id: 'qwen/qwen3.8-27b', name: 'Qwen 3.8 27B (Groq - Recommended)', provider: 'groq', contextWindow: 131072, description: 'High-performance open-source 27B coding model on Groq with high rate-limits.' },
+  { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B Instant (Groq)', provider: 'groq', contextWindow: 131072, description: 'Ultra-fast lightweight reasoning model on Groq.' },
+  { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B Flagship (Groq)', provider: 'groq', contextWindow: 131072, description: 'Flagship 120B reasoning & coding model running on Groq LPUs.' },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'google', contextWindow: 1048576, description: 'Latest high-speed multimodal model optimized for coding agents.' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', provider: 'google', contextWindow: 1048576, description: 'Ultra-fast low-latency Gemini model for quick tasks.' },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', provider: 'google', contextWindow: 1048576, description: 'High-efficiency lightweight model.' },
   { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'anthropic', contextWindow: 200000, description: 'State-of-the-art programming assistant with deep explanation.' },
   { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', contextWindow: 128000, description: 'Fast, cost-efficient OpenAI coding model.' },
   { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', contextWindow: 128000, description: 'Versatile, high-speed flagship reasoning model.' },
@@ -56,8 +59,8 @@ interface SettingsState {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  provider: 'google',
-  model: 'gemini-2.5-flash',
+  provider: 'groq',
+  model: 'qwen/qwen3.8-27b',
   temperature: 0.2,
   maxTokens: 4096,
   theme: 'dark',
@@ -69,6 +72,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const defaultModel = providerModels.length > 0 ? providerModels[0].id : '';
     set({ provider, model: defaultModel });
     const gatewayMap: Record<string, string> = {
+      groq: 'groq',
       google: 'google_gemini',
       anthropic: 'claude',
       openai: 'openai',
@@ -79,7 +83,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const agent = useAgentStore.getState();
       void agent.selectGatewayProvider(gwProv);
       if (defaultModel) void agent.selectGatewayModel(defaultModel);
-    }).catch(() => {});
+    }).catch(() => { });
   },
 
   setModel: (model) => set({ model }),

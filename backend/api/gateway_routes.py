@@ -28,6 +28,8 @@ class ProviderCancelRequest(BaseModel):
     task_id: str
 
 class UpdateGatewayConfigRequest(BaseModel):
+    groq_api_key: Optional[str] = None
+    groq_model: Optional[str] = None
     gemini_api_key: Optional[str] = None
     gemini_model: Optional[str] = None
     openai_api_key: Optional[str] = None
@@ -49,11 +51,15 @@ def get_gateway_config():
 def update_gateway_config(req: UpdateGatewayConfigRequest):
     """Update provider API keys or endpoints at runtime and refresh health cache."""
     updated = gateway_config.update_config(req.model_dump())
-    if req.gemini_api_key and req.gemini_api_key.strip():
+    if req.groq_api_key and req.groq_api_key.strip():
+        provider_registry.set_current_provider("groq")
+        gateway_config.ACTIVE_PROVIDER = "groq"
+        gateway_config.ACTIVE_MODEL = gateway_config.GROQ_MODEL
+    elif req.gemini_api_key and req.gemini_api_key.strip():
         provider_registry.set_current_provider("google_gemini")
         gateway_config.ACTIVE_PROVIDER = "google_gemini"
         gateway_config.ACTIVE_MODEL = gateway_config.GEMINI_MODEL
-    provider_cache.delete("global_health_monitor")
+    provider_cache.invalidate("global_health_monitor")
     return {"status": "success", "config": updated}
 
 

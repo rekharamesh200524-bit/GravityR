@@ -176,7 +176,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // Gateway states default
     gatewayStatus: 'offline',
     currentProvider: 'google_gemini',
-    currentModel: 'gemini-2.5-flash',
+    currentModel: 'gemini-3.5-flash',
     providerStatus: 'unknown',
     providerHealth: null,
     latencyMs: null,
@@ -424,6 +424,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       set({ activeProvider: provider });
       // Keep selected default synced with active Provider
       const map: Record<ProviderName, string> = {
+        groq: 'groq',
         google: 'google_gemini',
         ollama: 'ollama',
         runpod: 'runpod',
@@ -449,9 +450,22 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const currentName = data.current_provider;
         const currentStatus = (data.providers as Record<string, unknown>[] | undefined)?.find((p) => (p as Record<string, unknown>).provider === currentName) as Record<string, unknown> | undefined;
 
+        const defaultModelForProvider = (pName: string): string => {
+          if (pName === 'groq') return 'qwen/qwen3.8-27b';
+          if (pName === 'google_gemini') return 'gemini-3.5-flash';
+          if (pName === 'ollama') return 'qwen2.5-coder:7b';
+          return 'qwen/qwen3.8-27b';
+        };
+
+        const activeModel = get().currentModel;
+        const needsModelUpdate = !activeModel || 
+          (currentName === 'groq' && activeModel.includes('gemini')) ||
+          (currentName === 'google_gemini' && !activeModel.includes('gemini'));
+
         set({
           gatewayStatus: data.status === 'online' || data.status === 'degraded' ? 'online' : 'offline',
           currentProvider: currentName,
+          currentModel: needsModelUpdate ? defaultModelForProvider(currentName) : activeModel,
           providerStatus: currentStatus
             ? String(currentStatus.provider_status || currentStatus.status || 'offline')
             : 'offline',
@@ -497,7 +511,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
           body: JSON.stringify({ provider })
         });
         if (res.ok) {
-          set({ currentProvider: provider });
+          const nextModel = provider === 'groq' ? 'qwen/qwen3.8-27b' : (provider === 'google_gemini' ? 'gemini-3.5-flash' : (provider === 'ollama' ? 'qwen2.5-coder:7b' : 'qwen/qwen3.8-27b'));
+          set({ currentProvider: provider, currentModel: nextModel });
           void get().fetchGatewayHealth();
           // Update models lists depending on support rules
           void get().fetchModels();

@@ -169,6 +169,7 @@ export const AiExecutionPanel: React.FC = () => {
                 void selectGatewayProvider(prov);
                 // Also sync local activeProvider state representation
                 const map: Record<string, ProviderName> = {
+                  groq: 'groq',
                   google_gemini: 'google',
                   google_colab: 'google',
                   ollama: 'ollama',

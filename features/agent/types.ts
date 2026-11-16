@@ -181,7 +181,9 @@ export type ValidationIssueType =
   | 'missing-code'
   | 'missing-file-paths'
   | 'unsupported-operation'
-  | 'token-limit-exceeded';
+  | 'token-limit-exceeded'
+  | 'provider_error'
+  | 'cancelled';
 
 export interface ValidationIssue {
   type: ValidationIssueType;
@@ -272,7 +274,7 @@ export interface AgentLogEntry {
 }
 
 // ─── Model Provider Interface ────────────────────────────────
-export type ProviderName = 'google' | 'openai' | 'claude' | 'ollama' | 'runpod';
+export type ProviderName = 'groq' | 'google' | 'openai' | 'claude' | 'ollama' | 'runpod';
 
 export interface GenerateRequest {
   prompt: PromptObject;

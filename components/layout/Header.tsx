@@ -14,6 +14,7 @@ export const Header: React.FC = () => {
 
   // Map providers for selection dropdown
   const providerOptions = [
+    { value: 'groq', label: 'Groq (Open Source)' },
     { value: 'google', label: 'Google Gemini' },
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'openai', label: 'OpenAI' },

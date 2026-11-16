@@ -5,6 +5,7 @@ import {
   OpenAIProvider,
   ClaudeProvider,
   RunPodProvider,
+  GroqProvider,
 } from './providers';
 
 export {
@@ -13,10 +14,12 @@ export {
   OpenAIProvider,
   ClaudeProvider,
   RunPodProvider,
+  GroqProvider,
 } from './providers';
 
 // ─── Provider Registry ───────────────────────────────────────
 const registry: Record<ProviderName, IModelProvider> = {
+  groq: new GroqProvider(),
   google: new GoogleProvider(),
   ollama: new OllamaProvider(),
   openai: new OpenAIProvider(),
@@ -37,5 +40,5 @@ export function listProviders(): ProviderName[] {
 }
 
 export function getDefaultProvider(): IModelProvider {
-  return registry['google'];
+  return registry['groq'] || registry['google'];
 }

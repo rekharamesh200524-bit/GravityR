@@ -12,7 +12,8 @@ const API_BASE = typeof window !== 'undefined'
 
 // Map client-side provider names to backend provider names
 const PROVIDER_MAP: Record<ProviderName, string> = {
-  google: 'google_colab',
+  groq: 'groq',
+  google: 'google_gemini',
   ollama: 'ollama',
   runpod: 'runpod',
   openai: 'openai',
@@ -266,5 +267,28 @@ export class RunPodProvider implements IModelProvider {
 
   async health(): Promise<ProviderHealth> {
     return { provider: this.name, isOnline: true, latencyMs: 28, checkedAt: Date.now() };
+  }
+}
+
+// ─── Groq Cloud Open Source Provider ─────────────────────────
+export class GroqProvider implements IModelProvider {
+  readonly name: ProviderName = 'groq';
+  private readonly model = 'qwen/qwen3.8-27b';
+
+  async generate(request: GenerateRequest): Promise<GenerateResponse> {
+    return callGatewayGenerate(request.prompt.userPrompt, this.name, request.prompt.model || this.model, request.taskId);
+  }
+
+  async stream(
+    request: GenerateRequest,
+    onChunk: (chunk: string) => void,
+  ): Promise<GenerateResponse> {
+    return callGatewayStream(request.prompt.userPrompt, this.name, request.prompt.model || this.model, request.taskId, onChunk);
+  }
+
+  async cancel(_taskId: string): Promise<void> {}
+
+  async health(): Promise<ProviderHealth> {
+    return { provider: this.name, isOnline: true, latencyMs: 12, checkedAt: Date.now() };
   }
 }

@@ -29,12 +29,14 @@ class TestGoogleGeminiProvider(unittest.TestCase):
         self._orig_key = gateway_config.GEMINI_API_KEY
         self._orig_model = gateway_config.GEMINI_MODEL
         self._orig_provider = provider_registry.get_current_provider_name()
+        gateway_config._suppress_env_reload = True
         provider_factory._instances.pop("google_gemini", None)
 
     def tearDown(self):
         gateway_config.GEMINI_API_KEY = self._orig_key
         gateway_config.GEMINI_MODEL = self._orig_model
         provider_registry.set_current_provider(self._orig_provider)
+        gateway_config._suppress_env_reload = False
         provider_factory._instances.pop("google_gemini", None)
 
     # 1. Provider registration

@@ -43,6 +43,13 @@ class ProviderRegistry:
         default_name = self._current_provider_name
         defaults = [
             ProviderMetadata(
+                name="groq",
+                displayName="Groq Cloud (Open Source)",
+                status="enabled",
+                isDefault=(default_name == "groq"),
+                metadata={"type": "open_source_lpu", "connection_check": "/models"}
+            ),
+            ProviderMetadata(
                 name="google_gemini",
                 displayName="Google Gemini API",
                 status="enabled",

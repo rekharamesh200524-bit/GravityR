@@ -24,6 +24,9 @@ class ProviderCache:
         if key in self._cache:
             del self._cache[key]
 
+    def delete(self, key: str):
+        self.invalidate(key)
+
     def clear(self):
         self._cache.clear()
 

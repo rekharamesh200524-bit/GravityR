@@ -1,4 +1,15 @@
 import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Ensure .env from root is loaded into os.environ
+_root_env = Path(__file__).resolve().parent.parent / ".env"
+_backend_env = Path(__file__).resolve().parent / ".env"
+if _root_env.exists():
+    load_dotenv(dotenv_path=_root_env, override=False)
+if _backend_env.exists():
+    load_dotenv(dotenv_path=_backend_env, override=False)
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

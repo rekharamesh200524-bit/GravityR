@@ -56,7 +56,7 @@ export interface MemoryFact {
   createdAt: string;
 }
 
-export type AIProvider = 'google' | 'anthropic' | 'openai' | 'ollama';
+export type AIProvider = 'groq' | 'google' | 'anthropic' | 'openai' | 'ollama';
 
 export interface AIModel {
   id: string;

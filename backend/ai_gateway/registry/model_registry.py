@@ -31,6 +31,66 @@ class ModelRegistry:
     def _register_default_models(self):
         default_models = [
             ModelMetadata(
+                id="openai/gpt-oss-120b",
+                displayName="GPT-OSS 120B Flagship (Groq)",
+                providerSupport=["groq"],
+                parameterSize="120B",
+                contextWindow=131072,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="qwen/qwen3.8-27b",
+                displayName="Qwen 3.8 27B (Groq)",
+                providerSupport=["groq"],
+                parameterSize="27B",
+                contextWindow=131072,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="openai/gpt-oss-20b",
+                displayName="GPT-OSS 20B Instant (Groq)",
+                providerSupport=["groq"],
+                parameterSize="20B",
+                contextWindow=131072,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="gemini-3.5-flash",
+                displayName="Gemini 3.5 Flash",
+                providerSupport=["google_gemini"],
+                parameterSize="Flash",
+                contextWindow=1048576,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="gemini-3.5-flash-lite",
+                displayName="Gemini 3.5 Flash Lite",
+                providerSupport=["google_gemini"],
+                parameterSize="Flash-Lite",
+                contextWindow=1048576,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
+                id="gemini-3.1-flash-lite",
+                displayName="Gemini 3.1 Flash Lite",
+                providerSupport=["google_gemini"],
+                parameterSize="Flash-Lite",
+                contextWindow=1048576,
+                supportsStreaming=True,
+                codingOptimized=True,
+                status="active"
+            ),
+            ModelMetadata(
                 id="gemini-2.5-flash",
                 displayName="Gemini 2.5 Flash",
                 providerSupport=["google_gemini"],
@@ -38,7 +98,7 @@ class ModelRegistry:
                 contextWindow=1048576,
                 supportsStreaming=True,
                 codingOptimized=True,
-                status="active"
+                status="deprecated"
             ),
             ModelMetadata(
                 id="gemini-2.5-pro",

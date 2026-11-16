@@ -14,6 +14,7 @@ export const SettingsPanel: React.FC = () => {
   const { theme, setTheme, editorOptions, setEditorOption } = useSettingsStore();
   const { fetchGatewayHealth } = useAgentStore();
   const [geminiKey, setGeminiKey] = useState('');
+  const [groqKey, setGroqKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [claudeKey, setClaudeKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
@@ -45,6 +46,7 @@ export const SettingsPanel: React.FC = () => {
         runpod_endpoint: runpodUrl,
       };
       if (geminiKey.trim()) payload.gemini_api_key = geminiKey.trim();
+      if (groqKey.trim()) payload.groq_api_key = groqKey.trim();
       if (openaiKey.trim()) payload.openai_api_key = openaiKey.trim();
       if (claudeKey.trim()) payload.claude_api_key = claudeKey.trim();
 
@@ -57,6 +59,7 @@ export const SettingsPanel: React.FC = () => {
         const data = await res.json();
         setConfigStatus(data.config?.providers || null);
         setGeminiKey('');
+        setGroqKey('');
         setOpenaiKey('');
         setClaudeKey('');
         setSaveMessage('Provider settings saved.');
@@ -281,6 +284,22 @@ export const SettingsPanel: React.FC = () => {
         </div>
 
         <div className="space-y-2.5 text-xs">
+          <div>
+            <label className="flex justify-between text-[10px] font-semibold text-slate-400 uppercase mb-1">
+              <span>Groq Cloud API Key (Open Source)</span>
+              <span className={configStatus?.groq?.configured ? 'text-emerald-400' : 'text-amber-400'}>
+                {configStatus?.groq?.configured ? configStatus.groq.api_key_masked : 'Not set'}
+              </span>
+            </label>
+            <input
+              type="password"
+              value={groqKey}
+              onChange={(e) => setGroqKey(e.target.value)}
+              placeholder="gsk_..."
+              className="w-full bg-[var(--bg-card,#0f1322)] border border-[var(--border-color,#1e293b)] text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-violet-500"
+            />
+          </div>
+
           <div>
             <label className="flex justify-between text-[10px] font-semibold text-slate-400 uppercase mb-1">
               <span>Google Gemini API Key</span>
